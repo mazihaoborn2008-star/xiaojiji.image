@@ -1,0 +1,47 @@
+--- a/bot_web_mvp.py
++++ b/bot_web_mvp.py
+@@ -15,6 +15,7 @@
+ import hashlib
++import httpx
+ 
+@@ classify_agent_error (replace entire function)
+-def classify_agent_error(exc: Exception) -> str:
+-    text = str(exc or "").lower()
+-    if "timeout" in text or "timed out" in text or "超时" in text:
+-        return "agent_timeout"
+-    if "返回为空" in text or "包含中文" in text or "invalid" in text:
+-        return "agent_invalid_output"
+-    # 人物匹配相关错误，不是 Agent 服务问题
+-    if "识别到多个可能人物" in str(exc or ""):
+-        return "character_ambiguous"
+-    if "character_prompt_validation" in text:
+-        return "character_prompt_validation_failed"
+-    return "agent_unavailable"
++def classify_agent_error(exc: Exception) -> str:
++    # 类型判断优先，不依赖 str(exc)（httpx 超时异常 str() 可能为空）
++    if isinstance(exc, httpx.TimeoutException):
++        return "agent_timeout"
++    if isinstance(exc, httpx.ConnectError):
++        return "agent_connect_error"
++    if isinstance(exc, httpx.HTTPStatusError):
++        status = exc.response.status_code
++        if status == 429:
++            return "agent_rate_limited"
++        if status >= 500:
++            return "agent_server_error"
++        if status in (401, 403):
++            return "agent_auth_error"
++        return "agent_api_error"
++    text = str(exc or "").lower()
++    if "返回为空" in text or "包含中文" in text:
++        return "agent_invalid_output"
++    if "model" in text and ("not found" in text or "不存在" in text):
++        return "agent_model_not_found"
++    if "agent_busy" in text or "agent 正忙" in text:
++        return "agent_busy"
++    # 人物匹配相关错误，不是 Agent 服务问题
++    if "识别到多个可能人物" in str(exc or ""):
++        return "character_ambiguous"
++    if "character_prompt_validation" in text:
++        return "character_prompt_validation_failed"
++    return "agent_unavailable"

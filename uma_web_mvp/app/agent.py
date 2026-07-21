@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 import time
 
@@ -15,6 +16,8 @@ from .smart_agent.character_preferences import (
     CharacterPromptValidationError,
 )
 
+_agent_logger = logging.getLogger("app.agent")
+
 MAX_REFINED_PROMPT_CHARS = 2000
 CHINESE_RE = re.compile(r"[\u3400-\u9fff]")
 PREFIX_RE = re.compile(
@@ -23,6 +26,14 @@ PREFIX_RE = re.compile(
 )
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 AGENT_SEMAPHORE = asyncio.Semaphore(1)
+
+# 可重试的异常类型
+_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    httpx.TimeoutException,
+    httpx.ConnectError,
+)
+_AGENT_MAX_ATTEMPTS = 2
+_AGENT_RETRY_DELAY = 2.5
 
 BASE_SYSTEM_PROMPT = """
 You are a prompt converter for anime image generation models.
@@ -166,23 +177,59 @@ async def refine_prompt(
 ) -> str:
     if not settings.agent_enabled:
         raise RuntimeError("Agent 未启用")
-    try:
-        await asyncio.wait_for(AGENT_SEMAPHORE.acquire(), timeout=0.01)
-    except asyncio.TimeoutError as exc:
-        raise RuntimeError("Agent 正忙，请稍后再试") from exc
-    try:
-        if settings.agent_provider.lower() == "ollama":
-            prompt = await _refine_prompt_ollama(settings, text)
-        else:
-            prompt = await _refine_prompt_openai_compatible(settings, text)
-        return _apply_character_registry_to_refined_prompt(
-            text,
-            prompt,
-            resolved_character_ids=resolved_character_ids,
-            disable_character_library=disable_character_library,
-        )
-    finally:
-        AGENT_SEMAPHORE.release()
+    async with AGENT_SEMAPHORE:
+        provider = settings.agent_provider.lower()
+        model = settings.agent_model
+        for attempt in range(_AGENT_MAX_ATTEMPTS):
+            attempt_label = f"{attempt + 1}/{_AGENT_MAX_ATTEMPTS}"
+            t0 = time.monotonic()
+            try:
+                if provider == "ollama":
+                    prompt = await _refine_prompt_ollama(settings, text)
+                else:
+                    prompt = await _refine_prompt_openai_compatible(settings, text)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                _agent_logger.info(
+                    "provider=%s model=%s attempt=%s result=success elapsed_ms=%s",
+                    provider, model, attempt_label, elapsed_ms,
+                )
+                return _apply_character_registry_to_refined_prompt(
+                    text,
+                    prompt,
+                    resolved_character_ids=resolved_character_ids,
+                    disable_character_library=disable_character_library,
+                )
+            except asyncio.CancelledError:
+                raise
+            except _RETRYABLE_EXCEPTIONS as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                _agent_logger.warning(
+                    "provider=%s model=%s attempt=%s result=failed exception=%s elapsed_ms=%s",
+                    provider, model, attempt_label, type(exc).__name__, elapsed_ms,
+                )
+                if attempt >= _AGENT_MAX_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(_AGENT_RETRY_DELAY)
+            except httpx.HTTPStatusError as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                status = exc.response.status_code
+                _agent_logger.warning(
+                    "provider=%s model=%s attempt=%s result=failed exception=%s status=%s elapsed_ms=%s",
+                    provider, model, attempt_label, type(exc).__name__, status, elapsed_ms,
+                )
+                if status in (429, 502, 503, 504) and attempt < _AGENT_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(_AGENT_RETRY_DELAY)
+                    continue
+                raise
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                _agent_logger.warning(
+                    "provider=%s model=%s attempt=%s result=failed exception=%s elapsed_ms=%s",
+                    provider, model, attempt_label, type(exc).__name__, elapsed_ms,
+                )
+                raise
+        # Should not reach here, but safety fallback
+        raise RuntimeError("Agent 重试耗尽")
 
 
 def _strip_mistranslated_character_names(refined_prompt: str, character: dict) -> str:
@@ -372,11 +419,16 @@ async def _refine_prompt_ollama(settings: Settings, text: str) -> str:
             "temperature": 0.35,
         },
     }
-    timeout = max(int(settings.agent_timeout_seconds), 10)
+    read_timeout = max(int(settings.agent_timeout_seconds), 10)
+    timeout = httpx.Timeout(connect=10, read=read_timeout, write=30, pool=30)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=payload)
         if response.status_code != 200:
-            raise RuntimeError(f"Agent 返回 HTTP {response.status_code}")
+            raise httpx.HTTPStatusError(
+                f"Agent 返回 HTTP {response.status_code}",
+                request=response.request,
+                response=response,
+            )
         data = response.json()
         try:
             content = data["message"]["content"].strip()
@@ -419,11 +471,16 @@ async def _refine_prompt_openai_compatible(settings: Settings, text: str) -> str
             {"role": "user", "content": text},
         ],
     }
-    timeout = max(int(settings.agent_timeout_seconds), 10)
+    read_timeout = max(int(settings.agent_timeout_seconds), 10)
+    timeout = httpx.Timeout(connect=10, read=read_timeout, write=30, pool=30)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, headers=headers, json=payload)
     if response.status_code != 200:
-        raise RuntimeError(f"Agent 返回 HTTP {response.status_code}")
+        raise httpx.HTTPStatusError(
+            f"Agent 返回 HTTP {response.status_code}",
+            request=response.request,
+            response=response,
+        )
     data = response.json()
     try:
         content = data["choices"][0]["message"]["content"].strip()
