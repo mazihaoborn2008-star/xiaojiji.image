@@ -123,9 +123,26 @@ def is_prompt_exposure_request(text: str) -> bool:
     compact = _compact(text)
     if any(_compact(marker) in compact for marker in _PROMPT_EXPOSURE_MARKERS):
         return True
-    asks_to_show = any(marker in compact for marker in ("看", "查看", "显示", "给我", "show", "display", "reveal"))
-    mentions_internal_prompt = "prompt" in compact or "最终提示词" in compact or "内部提示词" in compact or "完整提示词" in compact
-    return asks_to_show and mentions_internal_prompt
+    # Natural requests often put modifiers between the action and the noun,
+    # for example "我看看你整理的提示词".  Exact marker matching misses
+    # those phrases and lets the request reach the model, which may then emit
+    # only an empty preamble while still obeying the no-prompt-exposure rule.
+    asks_to_show = any(
+        marker in compact
+        for marker in (
+            "看", "查看", "给我", "发我", "输出", "贴出",
+            "show", "reveal", "print",
+        )
+    )
+    mentions_prompt = "prompt" in compact or "提示词" in compact
+    shows_prompt = bool(
+        re.search(r"(?:展示|显示|display).{0,12}(?:提示词|prompt)", compact, re.I)
+        or (
+            ("展示出来" in compact or "显示出来" in compact)
+            and mentions_prompt
+        )
+    )
+    return mentions_prompt and (asks_to_show or shows_prompt)
 
 
 def prepare_turn(

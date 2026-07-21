@@ -1396,7 +1396,7 @@ async function init() {
   try {
     config = await api("/api/smart-agent/config");
   } catch (_) {
-    config = { enabled: true, cost_credits: 10 };
+    config = { enabled: true, cost_credits: 5 };
   }
 
   try {

@@ -1033,6 +1033,7 @@ def me(
         "settings": data["settings"],
         "price_fen_per_image": s.price_fen_per_image,
         "agent_enabled": s.agent_enabled,
+        "agent_surcharge_credits": int(s.agent_surcharge_credits),
         "is_admin": is_admin_user(user, s),
         "email_auth_available": s.is_email_auth_available(),
         "has_email_password": has_email_password,

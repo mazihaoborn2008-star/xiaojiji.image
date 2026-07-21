@@ -661,6 +661,31 @@ def get_me(settings: Settings, user_id: str) -> dict[str, Any]:
         conn.close()
 
 
+def calculate_generation_charge(
+    settings: Settings,
+    *,
+    user_id: str,
+    style_key: str,
+    use_agent: bool,
+) -> int:
+    """Calculate the total charge for a generation task.
+
+    Pricing:
+    - Normal generation: 1 credit
+    - Normal + Agent polish/translation: 2 credits
+    - Anima double sampling: 2 credits
+    - Anima + Agent: 3 credits
+    - Smart Agent: 5 credits (handled separately)
+    - Owner: always free
+    """
+    if settings.owner_free_generation and user_id == settings.owner_user_id:
+        return 0
+    cost_multiplier = 2 if style_key == "anima_owner" else 1
+    base_cost = int(settings.price_fen_per_image) * cost_multiplier
+    agent_surcharge = max(0, int(settings.agent_surcharge_credits)) if use_agent else 0
+    return base_cost + agent_surcharge
+
+
 def create_task_atomic(
     settings: Settings,
     *, job_code: str, user_id: str, username: str, prompt: str, style_key: str,
@@ -675,8 +700,12 @@ def create_task_atomic(
         has_input=bool(input_image_path), owner_user_id=settings.owner_user_id,
     )
     is_free = settings.owner_free_generation and user_id == settings.owner_user_id
-    cost_multiplier = 2 if style_key == "anima_owner" else 1
-    charged_fen = 0 if is_free else int(settings.price_fen_per_image) * cost_multiplier
+    charged_fen = calculate_generation_charge(
+        settings,
+        user_id=user_id,
+        style_key=style_key,
+        use_agent=use_agent,
+    )
     now = int(time.time())
     conn = connect(settings)
     try:

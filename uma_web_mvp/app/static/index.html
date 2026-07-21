@@ -93,7 +93,7 @@
         <div class="row">
           <label class="check agent-check">
             <input id="agentToggle" type="checkbox">
-            <span data-i18n="app.agent">使用 Agent 润色/翻译</span>
+            <span data-i18n="app.agent">使用 Agent 润色/翻译（额外收取 1 credit）</span>
           </label>
           <span id="agentHint" class="muted"></span>
         </div>
@@ -227,7 +227,7 @@
     <div class="dialog launch-dialog" role="dialog" aria-modal="true" aria-labelledby="smartAgentLaunchTitle">
       <h3 id="smartAgentLaunchTitle" data-i18n="smart.launch_title">智能 Agent 正式上线</h3>
       <p data-i18n="smart.launch_body">现在可以与小击击一起讨论生图灵感、优化提示词、匹配角色 Tag、工作流、LoRA 和画幅。你可以先聊方案，确认后再提交生图任务。</p>
-      <p class="launch-cost" data-i18n="smart.launch_cost">普通讨论不扣 credits，只有确认提交生图任务时才扣 10 credits。</p>
+      <p class="launch-cost" data-i18n="smart.launch_cost">普通讨论不扣 credits，只有确认提交生图任务时才扣 5 credits。</p>
       <div class="dialog-actions">
         <button id="smartAgentLaunchGoBtn" class="primary" type="button" data-i18n="smart.launch_try">立即体验</button>
         <button id="smartAgentLaunchLaterBtn" class="ghost" type="button" data-i18n="smart.launch_later">稍后再说</button>
@@ -235,7 +235,7 @@
     </div>
   </div>
 
-  <script src="/assets/i18n.js?v=character-ambiguity-resolution2" defer></script>
+  <script src="/assets/i18n.js?v=agent-pricing-v1" defer></script>
   <script src="/assets/copy-to-clipboard.js?v=fix-api-error-display-1" defer></script>
   <script src="/assets/app.js?v=character-ambiguity-resolution2" defer></script>
 </body>

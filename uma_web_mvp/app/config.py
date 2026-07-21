@@ -119,7 +119,8 @@ class Settings(BaseSettings):
 
     smart_agent_enabled: bool = False
     smart_agent_v2_enabled: bool = False
-    smart_agent_cost_credits: int = 10
+    smart_agent_cost_credits: int = 5
+    agent_surcharge_credits: int = 1
     smart_agent_rate_window_seconds: int = 600
     smart_agent_chat_user_limit: int = 30
     smart_agent_chat_ip_limit: int = 100
