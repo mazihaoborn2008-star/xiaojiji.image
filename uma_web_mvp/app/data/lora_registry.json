@@ -1,0 +1,12 @@
+[
+  {
+    "key": "mizuhara_chizuru",
+    "label": "Mizuhara Chizuru character LoRA",
+    "tags": "mizuhara chizuru, chizuru mizuhara, kanojo okarishimasu",
+    "compatible_workflows": [],
+    "min_weight": 0.55,
+    "max_weight": 1.1,
+    "default_weight": 0.85,
+    "comfy_lora_name": "mizuhara_chizuru_illust_scarxzys.safetensors"
+  }
+]

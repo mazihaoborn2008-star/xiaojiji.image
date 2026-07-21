@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户反馈 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=private-support-messages1">
+</head>
+<body class="sub-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n="nav.back">返回</button>
+    <div class="sub-page-title">
+      <span data-i18n="feedback.page_title">用户反馈</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+    </div>
+    <div class="nav-menu-wrap">
+      <button id="menuBtn" class="ghost menu-button" type="button" aria-expanded="false" aria-controls="navMenu">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        <span data-i18n="nav.menu">菜单</span>
+      </button>
+      <nav id="navMenu" class="nav-menu hidden" role="menu" aria-label="Main menu">
+        <a href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
+        <a href="/messages" role="menuitem" data-i18n="nav.messages">消息中心</a>
+        <a href="/topup" role="menuitem" data-i18n="nav.topup">充值</a>
+        <a href="/character-tags" role="menuitem" data-i18n="nav.character_tags">人物 Tag</a>
+        <a href="/feedback" role="menuitem" data-i18n="nav.feedback">用户反馈</a>
+        <a href="/change-password" role="menuitem" data-i18n="nav.change_password">修改密码</a>
+        <a href="/settings" role="menuitem" data-i18n="nav.settings">设置/帮助</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="layout-single">
+    <section class="panel form-panel">
+      <h1 data-i18n="feedback.title">反馈</h1>
+      <p class="muted" data-i18n="feedback.subtitle">反馈会发送给管理员处理。</p>
+
+      <form id="feedbackForm" class="stack">
+        <label><span data-i18n="feedback.type">反馈类型</span>
+          <select id="feedbackCategory">
+            <option value="add_character" data-i18n="feedback.category.add_character">增加角色</option>
+            <option value="bug_report" data-i18n="feedback.category.bug_report">修复 bug</option>
+            <option value="feature_request" data-i18n="feedback.category.feature_request">功能建议</option>
+            <option value="payment_issue" data-i18n="feedback.category.payment_issue">充值问题</option>
+            <option value="other" data-i18n="feedback.category.other">其他</option>
+          </select>
+        </label>
+        <label><span data-i18n="feedback.message">反馈内容</span>
+          <textarea id="feedbackMessage" maxlength="1000" rows="5"></textarea>
+        </label>
+        <button id="feedbackSubmitBtn" class="primary" type="submit" data-i18n="feedback.submit">提交反馈</button>
+        <div id="feedbackMessageBox" class="message"></div>
+      </form>
+    </section>
+  </main>
+
+  <script src="/assets/i18n.js?v=private-support-messages1" defer></script>
+  <script src="/assets/feedback.js?v=private-support-messages1" defer></script>
+</body>
+</html>

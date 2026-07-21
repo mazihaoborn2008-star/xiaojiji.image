@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>个人中心 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=referral-campaign-profile2">
+</head>
+<body>
+  <header class="simple-header">
+    <a class="ghost" href="/" data-i18n="profile.home">返回首页</a>
+    <button class="ghost lang-action" type="button" data-lang-toggle>English</button>
+  </header>
+
+  <main class="settings-shell profile-shell">
+    <section class="panel profile-card" id="referralSection">
+      <h1 data-i18n="profile.title">个人中心</h1>
+      <h2 data-i18n="profile.referral_title">邀请好友，双方都可获得 Credits</h2>
+      <p class="muted" id="referralStatus"></p>
+      <div class="profile-code-box">
+        <span class="muted" data-i18n="profile.my_code">我的邀请码</span>
+        <strong id="referralCode">-</strong>
+      </div>
+      <div class="row profile-actions">
+        <button id="claimReferralBtn" class="primary" type="button" data-i18n="profile.claim_code">领取邀请码</button>
+        <button id="copyReferralBtn" class="ghost" type="button" data-i18n="profile.copy_code">复制邀请码</button>
+      </div>
+      <p class="field-hint" data-i18n="profile.referral_rules">好友使用你的邀请码注册：好友额外获得 10 credits；你获得 20 credits；邀请人数不限，邀请码长期有效。</p>
+    </section>
+
+    <section class="panel profile-card">
+      <h2 data-i18n="profile.username_title">自定义用户名</h2>
+      <p class="muted" data-i18n="profile.username_hint">用户名只是显示名称，不用于登录。支持中文、英文字母、数字、下划线和短横线。</p>
+      <label>
+        <span data-i18n="profile.display_label">当前显示名</span>
+        <input id="displayUsernameInput" type="text" maxlength="20" autocomplete="off" placeholder="输入 2～20 个字符" data-i18n-placeholder="profile.username_placeholder">
+      </label>
+      <button id="saveUsernameBtn" class="primary" type="button" data-i18n="profile.save_username">保存用户名</button>
+      <div id="usernameMessage" class="message"></div>
+    </section>
+
+    <section class="panel profile-card">
+      <h2 data-i18n="profile.account_title">账号信息</h2>
+      <dl class="profile-info">
+        <dt data-i18n="profile.display_label">当前显示名</dt>
+        <dd id="profileDisplayName">-</dd>
+        <dt data-i18n="profile.account_type">账号类型</dt>
+        <dd id="profileProvider">-</dd>
+        <dt data-i18n="profile.balance">余额</dt>
+        <dd id="profileBalance">-</dd>
+      </dl>
+    </section>
+
+    <section class="panel profile-card">
+      <h2 data-i18n="profile.stats_title">邀请统计</h2>
+      <p id="referralCount">-</p>
+      <p id="referralReward">-</p>
+    </section>
+  </main>
+
+  <script src="/assets/i18n.js?v=referral-campaign-profile2" defer></script>
+  <script src="/assets/profile.js?v=referral-campaign-profile2" defer></script>
+</body>
+</html>

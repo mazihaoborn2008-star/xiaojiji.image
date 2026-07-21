@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>消息中心 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=private-support-messages1">
+</head>
+<body class="sub-page messages-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n="nav.back">返回</button>
+    <div class="sub-page-title">
+      <span data-i18n="messages.title">消息中心</span>
+      <span id="unreadBadge" class="support-unread-badge hidden">0</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+    </div>
+  </header>
+
+  <main class="layout-single support-layout">
+    <section class="panel support-shell">
+      <div class="support-list-pane" id="threadListPane">
+        <div class="support-pane-header">
+          <h1 data-i18n="messages.title">消息中心</h1>
+          <p class="muted" data-i18n="messages.subtitle">管理员发给你的消息会显示在这里。</p>
+        </div>
+        <div id="threadList" class="support-thread-list"></div>
+      </div>
+
+      <div class="support-detail-pane" id="threadDetailPane">
+        <button id="backToThreadsBtn" class="ghost support-mobile-back hidden" type="button" data-i18n="messages.back_to_threads">返回会话列表</button>
+        <div id="threadMeta" class="support-thread-meta muted" data-i18n="messages.select_thread">请选择一个会话。</div>
+        <div id="messageList" class="support-message-list"></div>
+        <form id="replyForm" class="support-reply hidden">
+          <textarea id="replyInput" maxlength="2000" rows="3" data-i18n-placeholder="messages.reply_placeholder" placeholder="回复管理员..."></textarea>
+          <button id="replyBtn" class="primary" type="submit" data-i18n="messages.send">发送</button>
+        </form>
+        <div id="closedNotice" class="message hidden" data-i18n="messages.closed">该会话已结束。</div>
+        <div id="supportMessage" class="message"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/assets/i18n.js?v=private-support-messages1" defer></script>
+  <script src="/assets/messages.js?v=private-support-messages1" defer></script>
+</body>
+</html>

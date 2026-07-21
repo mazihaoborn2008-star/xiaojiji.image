@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>畸形退款审核 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=prompt-ready-manual-refund1">
+</head>
+<body class="sub-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n-aria-label="nav.back" aria-label="返回">←</button>
+    <div class="sub-page-title">
+      <span data-i18n="admin_refund.page_title">畸形退款审核</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+      <button class="ghost lang-action" type="button" data-lang-toggle>English</button>
+    </div>
+  </header>
+
+  <main class="layout-single refund-admin-layout">
+    <section class="panel form-panel refund-panel">
+      <div class="section-heading-row">
+        <h1 data-i18n="admin_refund.page_title">畸形退款审核</h1>
+        <button id="refreshBtn" class="ghost compact" type="button" data-i18n="admin_refund.refresh">刷新</button>
+      </div>
+      <div class="refund-admin-toolbar">
+        <select id="statusFilter">
+          <option value="" data-i18n="admin_refund.filter_all">全部状态</option>
+          <option value="pending" data-i18n="refund.status.pending">待审核</option>
+          <option value="reviewing" data-i18n="refund.status.reviewing">审核中</option>
+          <option value="manual_review" data-i18n="refund.status.manual_review">人工复核</option>
+          <option value="rejected" data-i18n="refund.status.rejected">未通过</option>
+          <option value="refunded" data-i18n="refund.status.refunded">已退款</option>
+        </select>
+      </div>
+      <div class="refund-admin-grid">
+        <div id="adminRefundList" class="refund-task-list"></div>
+        <div id="adminRefundDetail" class="refund-admin-detail muted" data-i18n="admin_refund.detail_hint">选择左侧审核记录查看图片与模型结论。</div>
+      </div>
+      <div id="adminMessage" class="message"></div>
+    </section>
+  </main>
+
+  <div id="refundPreviewModal" class="refund-preview-modal hidden" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button id="refundPreviewClose" class="refund-preview-close" type="button" data-i18n-aria-label="refund.preview_close" aria-label="关闭预览">×</button>
+    <img id="refundPreviewImage" alt="">
+  </div>
+
+  <script src="/assets/i18n.js?v=prompt-ready-manual-refund1" defer></script>
+  <script src="/assets/admin-image-refunds.js?v=prompt-ready-manual-refund1" defer></script>
+</body>
+</html>

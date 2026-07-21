@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>智能 Agent 预览</title>
+  <link rel="stylesheet" href="/smart-agent-preview.css?v=preview2">
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <button class="back-btn" type="button" id="backBtn">返回</button>
+      <div class="title-wrap">
+        <div class="title">智能 Agent</div>
+        <div class="sub">小击击会帮你匹配角色 Tag、提示词、工作流、LoRA 和画幅</div>
+      </div>
+      <div class="credit">177 credits</div>
+    </header>
+
+    <nav class="agent-menu">
+      <button class="menu-btn" type="button" id="newChatBtn">新聊天</button>
+      <button class="menu-btn" type="button" id="clearBtn">清空记忆</button>
+      <button class="menu-btn" type="button" id="historyBtn">历史聊天</button>
+
+      <div class="history-panel" id="historyPanel">
+        <div class="history-item active">
+          <div class="history-title">无声铃鹿雨后街道</div>
+          <div class="history-time">当前聊天 · 15:14</div>
+        </div>
+        <div class="history-item">
+          <div class="history-title">头像风格测试</div>
+          <div class="history-time">昨天 22:31</div>
+        </div>
+        <div class="history-item">
+          <div class="history-title">横版风景插画</div>
+          <div class="history-time">前天 18:06</div>
+        </div>
+      </div>
+    </nav>
+
+    <section class="chat-card">
+      <div class="messages" id="messages"></div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="描述你想生成的画面..."></textarea>
+          <button class="send-btn" id="sendBtn" type="submit">发送</button>
+        </form>
+        <div class="hint">Enter 发送，Shift + Enter 换行。只有小击击真正提交生图任务时才扣 10 credits。</div>
+      </div>
+    </section>
+  </div>
+  <script src="/smart-agent-preview.js?v=preview2" defer></script>
+</body>
+</html>
+

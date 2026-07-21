@@ -1,0 +1,29 @@
+[
+  {
+    "key": "mizuhara_chizuru",
+    "name_zh": "水原千鹤",
+    "name_en": "Mizuhara Chizuru",
+    "category_zh": "租借女友",
+    "category_en": "Rent-A-Girlfriend",
+    "aliases": [
+      "水原千鹤",
+      "水原千鶴",
+      "千鹤",
+      "一之濑千鹤",
+      "mizuhara chizuru",
+      "chizuru mizuhara",
+      "mizuhara",
+      "Mizuhara",
+      "Chizuru",
+      "chizuru",
+      "rent a girlfriend chizuru",
+      "kanokari chizuru"
+    ],
+    "tags": "mizuhara chizuru, chizuru mizuhara, kanojo okarishimasu, rent-a-girlfriend, 1girl, long hair, brown hair, brown eyes",
+    "preferred_workflow_keys": ["wf_db5f33316a97", "mizuhara"],
+    "preferred_lora_keys": ["mizuhara_chizuru"],
+    "recommended_lora_key": "mizuhara_chizuru",
+    "recommended_workflow_key": "wf_db5f33316a97",
+    "lora_weight": 0.85
+  }
+]

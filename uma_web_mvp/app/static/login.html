@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <title>登录 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=referral-campaign-profile1">
+  <style>
+    .login-tab { text-decoration: none; display: inline-block; text-align: center; cursor: pointer; }
+  </style>
+</head>
+<body class="login-body">
+  <main class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <img class="login-brand-icon" src="/assets/branding/favicon-192x192.png?v=mizuhara" alt="小击击生图">
+        <h1>小击击生图</h1>
+        <p class="muted">登录后复用 Bot 的余额、队列与历史图片。</p>
+      </div>
+
+      <div class="login-methods">
+        <div class="login-tabs" role="tablist" aria-label="登录方式" id="authNav">
+          <a class="login-tab active" href="/login?view=discord" data-auth-view="discord" data-i18n="login.discord.tab">Discord 登录</a>
+          <a class="login-tab" href="/login?view=password" data-auth-view="password" data-i18n="login.password.tab">邮箱密码</a>
+          <a class="login-tab" href="/login?view=email-otp" data-auth-view="email-otp" data-i18n="login.code.tab">验证码登录</a>
+          <a class="login-tab" href="/login?view=register" data-auth-view="register" data-i18n="login.register.tab">邮箱注册</a>
+        </div>
+
+        <section id="discordPanel" class="login-panel">
+          <a class="button discord-btn" href="/auth/discord/login">
+            <svg width="20" height="15" viewBox="0 0 71 55" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <path d="M60.1045 4.8978C55.5792 2.8214 50.7265 1.2916 45.6527 0.41542C45.5603 0.39851 45.468 0.440769 45.4204 0.525289C44.7963 1.6353 44.105 3.0834 43.6209 4.2216C38.1637 3.4046 32.7345 3.4046 27.3892 4.2216C26.9048 3.0581 26.1885 1.6353 25.5617 0.525289C25.5141 0.443589 25.4218 0.40133 25.3294 0.41542C20.2584 1.2888 15.4057 2.8186 10.8776 4.8978C10.8384 4.9147 10.8048 4.9429 10.7825 4.9795C1.57795 18.7309 -0.943561 32.1443 0.293408 45.3914C0.299005 45.4562 0.335386 45.5182 0.385761 45.5576C6.45866 50.0174 12.3413 52.7249 18.1147 54.5195C18.2071 54.5477 18.305 54.5139 18.3638 54.4378C19.7295 52.5728 20.9469 50.6063 21.9907 48.5383C22.0523 48.4172 21.9935 48.2735 21.8676 48.2256C19.9366 47.4931 18.0979 46.6 16.3292 45.5858C16.1893 45.5041 16.1781 45.304 16.3068 45.2082C16.679 44.9293 17.0513 44.6391 17.4067 44.3461C17.471 44.2926 17.5606 44.2813 17.6362 44.3151C29.2558 49.6202 41.8354 49.6202 53.3179 44.3151C53.3935 44.2785 53.4831 44.2898 53.5502 44.3433C53.9057 44.6363 54.2779 44.9293 54.6529 45.2082C54.7816 45.304 54.7732 45.5041 54.6333 45.5858C52.8646 46.6197 51.0259 47.4931 49.0921 48.2228C48.9662 48.2707 48.9102 48.4172 48.9718 48.5383C50.038 50.6034 51.2554 52.5699 52.5959 54.435C52.6519 54.5139 52.7526 54.5477 52.845 54.5195C58.6464 52.7249 64.529 50.0174 70.6019 45.5576C70.6551 45.5182 70.6887 45.459 70.6943 45.3942C72.1747 30.0791 68.2147 16.7757 60.1968 4.9823C60.1772 4.9423 60.1437 4.9147 60.1045 4.8978Z" fill="white"/>
+            </svg>
+            <span data-i18n="login.discord.button">使用 Discord 登录</span>
+          </a>
+        </section>
+
+        <section id="passwordPanel" class="email-login-section login-panel hidden" aria-label="邮箱密码登录">
+          <h2 data-i18n="login.password.title">邮箱密码登录</h2>
+          <div id="passwordLoginStep" class="stack">
+            <label><span data-i18n="login.email">邮箱</span>
+              <input id="passwordEmailInput" type="email" placeholder="you@example.com" data-i18n-placeholder="common.email_placeholder" autocomplete="email" maxlength="254">
+            </label>
+            <label><span data-i18n="login.password">密码</span>
+              <input id="passwordInput" type="password" autocomplete="current-password" maxlength="128">
+            </label>
+            <button id="passwordLoginBtn" class="primary" type="button" data-i18n="login.button">登录</button>
+            <div class="row between">
+              <a id="forgotPasswordLink" class="link-button" href="/login?view=forgot-password" data-auth-view="forgot-password" data-i18n="login.forgot">忘记密码？</a>
+              <a id="useCodeLoginLink" class="link-button" href="/login?view=email-otp" data-auth-view="email-otp" data-i18n="login.use_code">使用验证码登录</a>
+            </div>
+            <div id="passwordMessage" class="message"></div>
+          </div>
+
+          <div id="passwordResetStep" class="stack hidden">
+            <h2 data-i18n="login.reset.title">重置登录密码</h2>
+            <label><span data-i18n="login.email">邮箱</span>
+              <input id="resetEmailInput" type="email" placeholder="you@example.com" data-i18n-placeholder="common.email_placeholder" autocomplete="email" maxlength="254">
+            </label>
+            <button id="resetSendCodeBtn" class="primary" type="button" data-i18n="login.reset.send">发送重置验证码</button>
+            <label><span data-i18n="login.code_label">6 位验证码</span>
+              <input id="resetCodeInput" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code">
+            </label>
+            <button id="resetVerifyCodeBtn" class="primary" type="button" data-i18n="login.reset.verify">验证验证码</button>
+            <div id="resetPasswordFields" class="stack hidden">
+              <label><span data-i18n="login.reset.new_password">新密码</span>
+                <input id="resetNewPasswordInput" type="password" autocomplete="new-password" maxlength="128">
+              </label>
+              <label><span data-i18n="login.reset.confirm_password">确认新密码</span>
+                <input id="resetConfirmPasswordInput" type="password" autocomplete="new-password" maxlength="128">
+              </label>
+              <button id="resetCompleteBtn" class="primary" type="button" data-i18n="login.reset.complete">重置密码并登录</button>
+            </div>
+            <a id="backToPasswordLoginLink" class="ghost" href="/login?view=password" data-auth-view="password" data-i18n="login.back_password">返回密码登录</a>
+            <div id="resetMessage" class="message"></div>
+          </div>
+        </section>
+
+        <section id="emailPanel" class="email-login-section login-panel hidden" aria-label="邮箱验证码登录">
+          <h2 id="emailPanelTitle" data-i18n="login.code.title">邮箱登录</h2>
+          <div id="emailRequestStep" class="stack">
+            <label><span data-i18n="login.email">邮箱</span>
+              <input id="emailInput" type="email" placeholder="you@example.com" data-i18n-placeholder="common.email_placeholder" autocomplete="email" maxlength="254">
+            </label>
+            <label id="inviteCodeField" class="hidden"><span data-i18n="login.invite_code">邀请码（可选）</span>
+              <input id="inviteCodeInput" type="text" placeholder="填写好友邀请码，注册后额外获得 10 credits" data-i18n-placeholder="login.invite_code_placeholder" autocomplete="off" maxlength="32">
+            </label>
+            <button id="sendCodeBtn" class="primary" type="button" data-i18n="login.send_code">发送验证码</button>
+            <div id="emailMessage" class="message"></div>
+          </div>
+          <div id="emailVerifyStep" class="stack hidden">
+            <p id="emailHint" class="muted" data-i18n="login.code_hint">验证码已经发送。</p>
+            <label><span data-i18n="login.code_label">6 位验证码</span>
+              <input id="codeInput" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code">
+            </label>
+            <div class="row">
+              <button id="verifyCodeBtn" class="primary" type="button" data-i18n="login.button">登录</button>
+              <button id="backToEmailBtn" class="ghost" type="button" data-i18n="login.change_email">更换邮箱</button>
+            </div>
+            <div id="verifyMessage" class="message"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/assets/i18n.js?v=referral-campaign-profile1" defer></script>
+  <script src="/assets/login.js?v=fix-syntax-1" defer></script>
+</body>
+</html>

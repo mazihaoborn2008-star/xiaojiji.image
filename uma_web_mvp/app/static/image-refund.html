@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>畸形图退款 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=refund-delegation-fix1">
+</head>
+<body class="sub-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n-aria-label="nav.back" aria-label="返回">←</button>
+    <div class="sub-page-title">
+      <span data-i18n="refund.page_title">畸形图退款</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+      <button class="ghost lang-action" type="button" data-lang-toggle>English</button>
+    </div>
+  </header>
+
+  <main class="layout-single refund-layout">
+    <section class="panel form-panel refund-panel">
+      <div>
+        <h1 data-i18n="refund.page_title">畸形图退款</h1>
+        <details class="refund-rules">
+          <summary data-i18n="refund.rules_show">查看退款规则</summary>
+          <p class="muted" data-i18n="refund.subtitle">仅适用于整张图严重人体结构崩坏、完全不可用的情况。单独六指、轻微手部错误、局部小瑕疵不会自动退款。</p>
+          <p class="refund-notice" data-i18n="refund.privacy_notice">提交审核后，该任务的生成图片和提示词将发送给自动审核模型，用于判断是否存在严重结构畸形。</p>
+        </details>
+      </div>
+
+      <section class="refund-section">
+        <h2 data-i18n="refund.history_title">申请记录</h2>
+        <div id="reviewList" class="refund-review-list"></div>
+      </section>
+
+      <section class="refund-section">
+        <div class="section-heading-row">
+          <h2 data-i18n="refund.eligible_title">可申请任务</h2>
+          <button id="refreshBtn" class="ghost compact" type="button" data-i18n="common.refresh">刷新</button>
+        </div>
+        <div id="eligibleList" class="refund-task-list"></div>
+      </section>
+
+      <div id="refundMessage" class="message"></div>
+    </section>
+  </main>
+
+  <div id="refundPreviewModal" class="refund-preview-modal hidden" role="dialog" aria-modal="true" aria-label="Image preview">
+    <button id="refundPreviewClose" class="refund-preview-close" type="button" data-i18n-aria-label="refund.preview_close" aria-label="关闭预览">×</button>
+    <img id="refundPreviewImage" alt="">
+  </div>
+
+  <script src="/assets/i18n.js?v=refund-delegation-fix1" defer></script>
+  <script src="/assets/image-refund.js?v=refund-no-limit" defer></script>
+</body>
+</html>

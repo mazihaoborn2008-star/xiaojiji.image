@@ -1,0 +1,1754 @@
+[
+  {
+    "category_zh": "VOCALOID",
+    "category_en": "VOCALOID",
+    "items": [
+      {
+        "name_en": "Hatsune Miku",
+        "tags": "hatsune miku, vocaloid",
+        "name_zh": "初音未来"
+      },
+      {
+        "name_en": "Kagamine Rin",
+        "tags": "kagamine rin, vocaloid",
+        "name_zh": "镜音铃"
+      },
+      {
+        "name_en": "Kagamine Len",
+        "tags": "kagamine len, vocaloid",
+        "name_zh": "镜音连"
+      },
+      {
+        "name_en": "Megurine Luka",
+        "tags": "megurine luka, vocaloid",
+        "name_zh": "巡音流歌"
+      },
+      {
+        "name_en": "Kasane Teto",
+        "tags": "kasane teto, utau",
+        "name_zh": "重音Teto"
+      },
+      {
+        "name_en": "MEIKO",
+        "tags": "meiko, vocaloid",
+        "name_zh": "MEIKO"
+      },
+      {
+        "name_en": "GUMI",
+        "tags": "gumi, vocaloid",
+        "name_zh": "GUMI"
+      },
+      {
+        "name_en": "IA",
+        "tags": "ia (vocaloid), vocaloid",
+        "name_zh": "IA"
+      },
+      {
+        "name_en": "Yuzuki Yukari",
+        "tags": "yuzuki yukari, vocaloid",
+        "name_zh": "结月缘"
+      },
+      {
+        "name_en": "Otomachi Una",
+        "tags": "otomachi una, vocaloid",
+        "name_zh": "音街鳗"
+      },
+      {
+        "name_en": "Luo Tianyi",
+        "tags": "luo tianyi, vocaloid",
+        "name_zh": "洛天依"
+      },
+      {
+        "name_en": "Yuezheng Ling",
+        "tags": "yuezheng ling, vocaloid",
+        "name_zh": "乐正绫"
+      },
+      {
+        "name_en": "KAFU",
+        "tags": "kafu (cevio), cevio",
+        "name_zh": "可不"
+      }
+    ]
+  },
+  {
+    "category_zh": "原神",
+    "category_en": "Genshin Impact",
+    "items": [
+      {
+        "name_en": "Raiden Shogun",
+        "tags": "raiden shogun, genshin impact",
+        "name_zh": "雷电将军"
+      },
+      {
+        "name_en": "Furina",
+        "tags": "furina, genshin impact",
+        "name_zh": "芙宁娜"
+      },
+      {
+        "name_en": "Nahida",
+        "tags": "nahida, genshin impact",
+        "name_zh": "纳西妲"
+      },
+      {
+        "name_en": "Hu Tao",
+        "tags": "hu tao, genshin impact",
+        "name_zh": "胡桃"
+      },
+      {
+        "name_en": "Ganyu",
+        "tags": "ganyu, genshin impact",
+        "name_zh": "甘雨"
+      },
+      {
+        "name_en": "Keqing",
+        "tags": "keqing, genshin impact",
+        "name_zh": "刻晴"
+      },
+      {
+        "name_en": "Yae Miko",
+        "tags": "yae miko, genshin impact",
+        "name_zh": "八重神子"
+      },
+      {
+        "name_en": "Nilou",
+        "tags": "nilou, genshin impact",
+        "name_zh": "妮露"
+      },
+      {
+        "name_en": "Mona",
+        "tags": "mona, genshin impact",
+        "name_zh": "莫娜"
+      },
+      {
+        "name_en": "Kamisato Ayaka",
+        "tags": "kamisato ayaka, genshin impact",
+        "name_zh": "神里绫华"
+      },
+      {
+        "name_en": "Lumine",
+        "tags": "lumine (genshin impact), genshin impact",
+        "name_zh": "荧"
+      },
+      {
+        "name_en": "Jean",
+        "tags": "jean (genshin impact), genshin impact",
+        "name_zh": "琴"
+      },
+      {
+        "name_en": "Lisa",
+        "tags": "lisa (genshin impact), genshin impact",
+        "name_zh": "丽莎"
+      },
+      {
+        "name_en": "Barbara",
+        "tags": "barbara (genshin impact), genshin impact",
+        "name_zh": "芭芭拉"
+      },
+      {
+        "name_en": "Klee",
+        "tags": "klee (genshin impact), genshin impact",
+        "name_zh": "可莉"
+      },
+      {
+        "name_en": "Eula",
+        "tags": "eula (genshin impact), genshin impact",
+        "name_zh": "优菈"
+      },
+      {
+        "name_en": "Shenhe",
+        "tags": "shenhe (genshin impact), genshin impact",
+        "name_zh": "申鹤"
+      },
+      {
+        "name_en": "Sangonomiya Kokomi",
+        "tags": "sangonomiya kokomi, genshin impact",
+        "name_zh": "珊瑚宫心海"
+      },
+      {
+        "name_en": "Yoimiya",
+        "tags": "yoimiya, genshin impact",
+        "name_zh": "宵宫"
+      },
+      {
+        "name_en": "Navia",
+        "tags": "navia (genshin impact), genshin impact",
+        "name_zh": "娜维娅"
+      },
+      {
+        "name_en": "Arlecchino",
+        "tags": "arlecchino (genshin impact), genshin impact",
+        "name_zh": "阿蕾奇诺"
+      },
+      {
+        "name_en": "Clorinde",
+        "tags": "clorinde (genshin impact), genshin impact",
+        "name_zh": "克洛琳德"
+      },
+      {
+        "name_en": "Xianyun",
+        "tags": "xianyun (genshin impact), genshin impact",
+        "name_zh": "闲云"
+      },
+      {
+        "name_en": "Mavuika",
+        "tags": "mavuika (genshin impact), genshin impact",
+        "name_zh": "玛薇卡"
+      },
+      {
+        "name_en": "Citlali",
+        "tags": "citlali (genshin impact), genshin impact",
+        "name_zh": "茜特菈莉"
+      },
+      {
+        "name_en": "Xilonen",
+        "tags": "xilonen (genshin impact), genshin impact",
+        "name_zh": "希诺宁"
+      },
+      {
+        "name_en": "Chasca",
+        "tags": "chasca (genshin impact), genshin impact",
+        "name_zh": "恰斯卡"
+      },
+      {
+        "name_en": "Skirk",
+        "tags": "skirk (genshin impact), genshin impact",
+        "name_zh": "丝柯克"
+      },
+      {
+        "name_en": "Lynette",
+        "tags": "lynette (genshin impact), genshin impact",
+        "name_zh": "琳妮特"
+      },
+      {
+        "name_en": "Kirara",
+        "tags": "kirara (genshin impact), genshin impact",
+        "name_zh": "绮良良"
+      }
+    ]
+  },
+  {
+    "category_zh": "崩坏：星穹铁道",
+    "category_en": "Honkai: Star Rail",
+    "items": [
+      {
+        "name_en": "Kafka",
+        "tags": "kafka (honkai: star rail), honkai: star rail",
+        "name_zh": "卡芙卡"
+      },
+      {
+        "name_en": "Firefly",
+        "tags": "firefly (honkai: star rail), honkai: star rail",
+        "name_zh": "流萤"
+      },
+      {
+        "name_en": "Acheron",
+        "tags": "acheron (honkai: star rail), honkai: star rail",
+        "name_zh": "黄泉"
+      },
+      {
+        "name_en": "Sparkle",
+        "tags": "sparkle (honkai: star rail), honkai: star rail",
+        "name_zh": "花火"
+      },
+      {
+        "name_en": "March 7th",
+        "tags": "march 7th (honkai: star rail), honkai: star rail",
+        "name_zh": "三月七"
+      },
+      {
+        "name_en": "Stelle",
+        "tags": "stelle (honkai: star rail), honkai: star rail",
+        "name_zh": "星"
+      },
+      {
+        "name_en": "Silver Wolf",
+        "tags": "silver wolf (honkai: star rail), honkai: star rail",
+        "name_zh": "银狼"
+      },
+      {
+        "name_en": "Herta",
+        "tags": "herta (honkai: star rail), honkai: star rail",
+        "name_zh": "黑塔"
+      },
+      {
+        "name_en": "Bronya",
+        "tags": "bronya rand, honkai: star rail",
+        "name_zh": "布洛妮娅"
+      },
+      {
+        "name_en": "Seele",
+        "tags": "seele (honkai: star rail), honkai: star rail",
+        "name_zh": "希儿"
+      },
+      {
+        "name_en": "Himeko",
+        "tags": "himeko (honkai: star rail), honkai: star rail",
+        "name_zh": "姬子"
+      },
+      {
+        "name_en": "Fu Xuan",
+        "tags": "fu xuan, honkai: star rail",
+        "name_zh": "符玄"
+      },
+      {
+        "name_en": "Qingque",
+        "tags": "qingque, honkai: star rail",
+        "name_zh": "青雀"
+      },
+      {
+        "name_en": "Jingliu",
+        "tags": "jingliu, honkai: star rail",
+        "name_zh": "镜流"
+      },
+      {
+        "name_en": "Topaz",
+        "tags": "topaz (honkai: star rail), honkai: star rail",
+        "name_zh": "托帕"
+      },
+      {
+        "name_en": "Guinaifen",
+        "tags": "guinaifen, honkai: star rail",
+        "name_zh": "桂乃芬"
+      },
+      {
+        "name_en": "Black Swan",
+        "tags": "black swan (honkai: star rail), honkai: star rail",
+        "name_zh": "黑天鹅"
+      },
+      {
+        "name_en": "Ruan Mei",
+        "tags": "ruan mei, honkai: star rail",
+        "name_zh": "阮梅"
+      },
+      {
+        "name_en": "Robin",
+        "tags": "robin (honkai: star rail), honkai: star rail",
+        "name_zh": "知更鸟"
+      },
+      {
+        "name_en": "Jade",
+        "tags": "jade (honkai: star rail), honkai: star rail",
+        "name_zh": "翡翠"
+      },
+      {
+        "name_en": "Feixiao",
+        "tags": "feixiao, honkai: star rail",
+        "name_zh": "飞霄"
+      },
+      {
+        "name_en": "Lingsha",
+        "tags": "lingsha, honkai: star rail",
+        "name_zh": "灵砂"
+      },
+      {
+        "name_en": "The Herta",
+        "tags": "the herta, honkai: star rail",
+        "name_zh": "大黑塔"
+      },
+      {
+        "name_en": "Aglaea",
+        "tags": "aglaea, honkai: star rail",
+        "name_zh": "阿格莱雅"
+      },
+      {
+        "name_en": "Castorice",
+        "tags": "castorice, honkai: star rail",
+        "name_zh": "遐蝶"
+      },
+      {
+        "name_en": "Tribbie",
+        "tags": "tribbie, honkai: star rail",
+        "name_zh": "缇宝"
+      }
+    ]
+  },
+  {
+    "category_zh": "碧蓝档案",
+    "category_en": "Blue Archive",
+    "items": [
+      {
+        "name_en": "Sunaookami Shiroko",
+        "tags": "sunaookami shiroko, blue archive",
+        "name_zh": "砂狼白子"
+      },
+      {
+        "name_en": "Tendou Aris",
+        "tags": "tendou aris, blue archive",
+        "name_zh": "天童爱丽丝"
+      },
+      {
+        "name_en": "Hayase Yuuka",
+        "tags": "hayase yuuka, blue archive",
+        "name_zh": "早濑优香"
+      },
+      {
+        "name_en": "Misono Mika",
+        "tags": "misono mika, blue archive",
+        "name_zh": "圣园未花"
+      },
+      {
+        "name_en": "Ajitani Hifumi",
+        "tags": "ajitani hifumi, blue archive",
+        "name_zh": "阿慈谷日富美"
+      },
+      {
+        "name_en": "Shirasu Azusa",
+        "tags": "shirasu azusa, blue archive",
+        "name_zh": "白洲梓"
+      },
+      {
+        "name_en": "Rikuhachima Aru",
+        "tags": "rikuhachima aru, blue archive",
+        "name_zh": "陆八魔阿露"
+      },
+      {
+        "name_en": "Kurosaki Koyuki",
+        "tags": "kurosaki koyuki, blue archive",
+        "name_zh": "黑崎小雪"
+      },
+      {
+        "name_en": "Takanashi Hoshino",
+        "tags": "takanashi hoshino, blue archive",
+        "name_zh": "小鸟游星野"
+      },
+      {
+        "name_en": "Izayoi Nonomi",
+        "tags": "izayoi nonomi, blue archive",
+        "name_zh": "十六夜野宫"
+      },
+      {
+        "name_en": "Kuromi Serika",
+        "tags": "kuromi serika, blue archive",
+        "name_zh": "黑见芹香"
+      },
+      {
+        "name_en": "Sorasaki Hina",
+        "tags": "sorasaki hina, blue archive",
+        "name_zh": "空崎日奈"
+      },
+      {
+        "name_en": "Shiromi Iori",
+        "tags": "shiromi iori, blue archive",
+        "name_zh": "银镜伊织"
+      },
+      {
+        "name_en": "Amau Ako",
+        "tags": "amau ako, blue archive",
+        "name_zh": "天雨亚子"
+      },
+      {
+        "name_en": "Asagi Mutsuki",
+        "tags": "asagi mutsuki, blue archive",
+        "name_zh": "浅黄睦月"
+      },
+      {
+        "name_en": "Onikata Kayoko",
+        "tags": "onikata kayoko, blue archive",
+        "name_zh": "鬼方佳代子"
+      },
+      {
+        "name_en": "Igusa Haruka",
+        "tags": "igusa haruka, blue archive",
+        "name_zh": "伊草遥香"
+      },
+      {
+        "name_en": "Ichinose Asuna",
+        "tags": "ichinose asuna, blue archive",
+        "name_zh": "一之濑明日奈"
+      },
+      {
+        "name_en": "Kakudate Karin",
+        "tags": "kakudate karin, blue archive",
+        "name_zh": "角楯花凛"
+      },
+      {
+        "name_en": "Mikamo Neru",
+        "tags": "mikamo neru, blue archive",
+        "name_zh": "美甘宁瑠"
+      },
+      {
+        "name_en": "Urawa Hanako",
+        "tags": "urawa hanako, blue archive",
+        "name_zh": "浦和花子"
+      },
+      {
+        "name_en": "Shimoe Koharu",
+        "tags": "shimoe koharu, blue archive",
+        "name_zh": "下江小春"
+      },
+      {
+        "name_en": "Kozeki Ui",
+        "tags": "kozeki ui, blue archive",
+        "name_zh": "古关忧"
+      },
+      {
+        "name_en": "Kosaka Wakamo",
+        "tags": "kosaka wakamo, blue archive",
+        "name_zh": "狐坂若藻"
+      }
+    ]
+  },
+  {
+    "category_zh": "Fate",
+    "category_en": "Fate",
+    "items": [
+      {
+        "name_en": "Saber / Artoria",
+        "tags": "artoria pendragon, fate/stay night",
+        "name_zh": "阿尔托莉雅"
+      },
+      {
+        "name_en": "Tohsaka Rin",
+        "tags": "tohsaka rin, fate/stay night",
+        "name_zh": "远坂凛"
+      },
+      {
+        "name_en": "Matou Sakura",
+        "tags": "matou sakura, fate/stay night",
+        "name_zh": "间桐樱"
+      },
+      {
+        "name_en": "Mash Kyrielight",
+        "tags": "mash kyrielight, fate/grand order",
+        "name_zh": "玛修"
+      },
+      {
+        "name_en": "Jeanne d'Arc",
+        "tags": "jeanne d'arc (fate), fate/grand order",
+        "name_zh": "贞德"
+      },
+      {
+        "name_en": "Nero Claudius",
+        "tags": "nero claudius (fate), fate/grand order",
+        "name_zh": "尼禄"
+      },
+      {
+        "name_en": "Scathach",
+        "tags": "scathach (fate), fate/grand order",
+        "name_zh": "斯卡哈"
+      },
+      {
+        "name_en": "Illyasviel von Einzbern",
+        "tags": "illyasviel von einzbern, fate/stay night",
+        "name_zh": "伊莉雅丝菲尔"
+      },
+      {
+        "name_en": "Medusa",
+        "tags": "medusa (fate), fate/stay night",
+        "name_zh": "美杜莎"
+      },
+      {
+        "name_en": "Mordred",
+        "tags": "mordred (fate), fate/grand order",
+        "name_zh": "莫德雷德"
+      },
+      {
+        "name_en": "Jeanne d'Arc Alter",
+        "tags": "jeanne d'arc alter, fate/grand order",
+        "name_zh": "黑贞德"
+      },
+      {
+        "name_en": "Ishtar",
+        "tags": "ishtar (fate), fate/grand order",
+        "name_zh": "伊什塔尔"
+      },
+      {
+        "name_en": "Ereshkigal",
+        "tags": "ereshkigal (fate), fate/grand order",
+        "name_zh": "艾蕾什基伽尔"
+      },
+      {
+        "name_en": "Morgan",
+        "tags": "morgan le fay (fate), fate/grand order",
+        "name_zh": "摩根"
+      },
+      {
+        "name_en": "Melusine",
+        "tags": "melusine (fate), fate/grand order",
+        "name_zh": "梅柳齐娜"
+      },
+      {
+        "name_en": "BB",
+        "tags": "bb (fate), fate/grand order",
+        "name_zh": "BB"
+      },
+      {
+        "name_en": "Kama",
+        "tags": "kama (fate), fate/grand order",
+        "name_zh": "迦摩"
+      },
+      {
+        "name_en": "Okita Souji",
+        "tags": "okita souji (fate), fate/grand order",
+        "name_zh": "冲田总司"
+      },
+      {
+        "name_en": "Miyamoto Musashi",
+        "tags": "miyamoto musashi (fate), fate/grand order",
+        "name_zh": "宫本武藏"
+      }
+    ]
+  },
+  {
+    "category_zh": "东方Project",
+    "category_en": "Touhou Project",
+    "items": [
+      {
+        "name_en": "Hakurei Reimu",
+        "tags": "hakurei reimu, touhou",
+        "name_zh": "博丽灵梦"
+      },
+      {
+        "name_en": "Kirisame Marisa",
+        "tags": "kirisame marisa, touhou",
+        "name_zh": "雾雨魔理沙"
+      },
+      {
+        "name_en": "Izayoi Sakuya",
+        "tags": "izayoi sakuya, touhou",
+        "name_zh": "十六夜咲夜"
+      },
+      {
+        "name_en": "Remilia Scarlet",
+        "tags": "remilia scarlet, touhou",
+        "name_zh": "蕾米莉亚"
+      },
+      {
+        "name_en": "Flandre Scarlet",
+        "tags": "flandre scarlet, touhou",
+        "name_zh": "芙兰朵露"
+      },
+      {
+        "name_en": "Konpaku Youmu",
+        "tags": "konpaku youmu, touhou",
+        "name_zh": "魂魄妖梦"
+      },
+      {
+        "name_en": "Kochiya Sanae",
+        "tags": "kochiya sanae, touhou",
+        "name_zh": "东风谷早苗"
+      },
+      {
+        "name_en": "Patchouli Knowledge",
+        "tags": "patchouli knowledge, touhou",
+        "name_zh": "帕秋莉·诺蕾姬"
+      },
+      {
+        "name_en": "Alice Margatroid",
+        "tags": "alice margatroid, touhou",
+        "name_zh": "爱丽丝·玛格特洛依德"
+      },
+      {
+        "name_en": "Cirno",
+        "tags": "cirno, touhou",
+        "name_zh": "琪露诺"
+      },
+      {
+        "name_en": "Reisen Udongein Inaba",
+        "tags": "reisen udongein inaba, touhou",
+        "name_zh": "铃仙·优昙华院·因幡"
+      },
+      {
+        "name_en": "Houraisan Kaguya",
+        "tags": "houraisan kaguya, touhou",
+        "name_zh": "蓬莱山辉夜"
+      },
+      {
+        "name_en": "Fujiwara no Mokou",
+        "tags": "fujiwara no mokou, touhou",
+        "name_zh": "藤原妹红"
+      },
+      {
+        "name_en": "Yakumo Yukari",
+        "tags": "yakumo yukari, touhou",
+        "name_zh": "八云紫"
+      },
+      {
+        "name_en": "Saigyouji Yuyuko",
+        "tags": "saigyouji yuyuko, touhou",
+        "name_zh": "西行寺幽幽子"
+      },
+      {
+        "name_en": "Shameimaru Aya",
+        "tags": "shameimaru aya, touhou",
+        "name_zh": "射命丸文"
+      },
+      {
+        "name_en": "Komeiji Koishi",
+        "tags": "komeiji koishi, touhou",
+        "name_zh": "古明地恋"
+      },
+      {
+        "name_en": "Komeiji Satori",
+        "tags": "komeiji satori, touhou",
+        "name_zh": "古明地觉"
+      },
+      {
+        "name_en": "Hinanawi Tenshi",
+        "tags": "hinanawi tenshi, touhou",
+        "name_zh": "比那名居天子"
+      }
+    ]
+  },
+  {
+    "category_zh": "碧蓝航线",
+    "category_en": "Azur Lane",
+    "items": [
+      {
+        "name_en": "Enterprise",
+        "tags": "enterprise (azur lane), azur lane",
+        "name_zh": "企业"
+      },
+      {
+        "name_en": "Belfast",
+        "tags": "belfast (azur lane), azur lane",
+        "name_zh": "贝尔法斯特"
+      },
+      {
+        "name_en": "New Jersey",
+        "tags": "new jersey (azur lane), azur lane",
+        "name_zh": "新泽西"
+      },
+      {
+        "name_en": "Taihou",
+        "tags": "taihou (azur lane), azur lane",
+        "name_zh": "大凤"
+      },
+      {
+        "name_en": "Formidable",
+        "tags": "formidable (azur lane), azur lane",
+        "name_zh": "可畏"
+      },
+      {
+        "name_en": "Akagi",
+        "tags": "akagi (azur lane), azur lane",
+        "name_zh": "赤城"
+      },
+      {
+        "name_en": "Kaga",
+        "tags": "kaga (azur lane), azur lane",
+        "name_zh": "加贺"
+      },
+      {
+        "name_en": "Atago",
+        "tags": "atago (azur lane), azur lane",
+        "name_zh": "爱宕"
+      },
+      {
+        "name_en": "Takao",
+        "tags": "takao (azur lane), azur lane",
+        "name_zh": "高雄"
+      },
+      {
+        "name_en": "Prinz Eugen",
+        "tags": "prinz eugen (azur lane), azur lane",
+        "name_zh": "欧根亲王"
+      },
+      {
+        "name_en": "Friedrich der Grosse",
+        "tags": "friedrich der grosse (azur lane), azur lane",
+        "name_zh": "腓特烈大帝"
+      },
+      {
+        "name_en": "Agir",
+        "tags": "agir (azur lane), azur lane",
+        "name_zh": "埃吉尔"
+      },
+      {
+        "name_en": "Shinano",
+        "tags": "shinano (azur lane), azur lane",
+        "name_zh": "信浓"
+      },
+      {
+        "name_en": "Musashi",
+        "tags": "musashi (azur lane), azur lane",
+        "name_zh": "武藏"
+      },
+      {
+        "name_en": "Cheshire",
+        "tags": "cheshire (azur lane), azur lane",
+        "name_zh": "柴郡"
+      },
+      {
+        "name_en": "Dido",
+        "tags": "dido (azur lane), azur lane",
+        "name_zh": "黛朵"
+      },
+      {
+        "name_en": "Unicorn",
+        "tags": "unicorn (azur lane), azur lane",
+        "name_zh": "独角兽"
+      },
+      {
+        "name_en": "St. Louis",
+        "tags": "st. louis (azur lane), azur lane",
+        "name_zh": "圣路易斯"
+      }
+    ]
+  },
+  {
+    "category_zh": "NIKKE",
+    "category_en": "NIKKE",
+    "items": [
+      {
+        "name_en": "Rapi",
+        "tags": "rapi (nikke), goddess of victory: nikke",
+        "name_zh": "拉毗"
+      },
+      {
+        "name_en": "Anis",
+        "tags": "anis (nikke), goddess of victory: nikke",
+        "name_zh": "阿妮斯"
+      },
+      {
+        "name_en": "Alice",
+        "tags": "alice (nikke), goddess of victory: nikke",
+        "name_zh": "爱丽丝"
+      },
+      {
+        "name_en": "Marian",
+        "tags": "marian (nikke), goddess of victory: nikke",
+        "name_zh": "玛丽安"
+      },
+      {
+        "name_en": "Dorothy",
+        "tags": "dorothy (nikke), goddess of victory: nikke",
+        "name_zh": "桃乐丝"
+      },
+      {
+        "name_en": "Modernia",
+        "tags": "modernia (nikke), goddess of victory: nikke",
+        "name_zh": "神罚"
+      },
+      {
+        "name_en": "Scarlet",
+        "tags": "scarlet (nikke), goddess of victory: nikke",
+        "name_zh": "红莲"
+      },
+      {
+        "name_en": "Red Hood",
+        "tags": "red hood (nikke), goddess of victory: nikke",
+        "name_zh": "小红帽"
+      },
+      {
+        "name_en": "Snow White",
+        "tags": "snow white (nikke), goddess of victory: nikke",
+        "name_zh": "白雪公主"
+      },
+      {
+        "name_en": "Noir",
+        "tags": "noir (nikke), goddess of victory: nikke",
+        "name_zh": "诺亚尔"
+      },
+      {
+        "name_en": "Blanc",
+        "tags": "blanc (nikke), goddess of victory: nikke",
+        "name_zh": "布兰儿"
+      },
+      {
+        "name_en": "Crown",
+        "tags": "crown (nikke), goddess of victory: nikke",
+        "name_zh": "皇冠"
+      },
+      {
+        "name_en": "Viper",
+        "tags": "viper (nikke), goddess of victory: nikke",
+        "name_zh": "毒蛇"
+      },
+      {
+        "name_en": "Soda",
+        "tags": "soda (nikke), goddess of victory: nikke",
+        "name_zh": "苏打"
+      },
+      {
+        "name_en": "Privaty",
+        "tags": "privaty (nikke), goddess of victory: nikke",
+        "name_zh": "普丽瓦蒂"
+      },
+      {
+        "name_en": "Helm",
+        "tags": "helm (nikke), goddess of victory: nikke",
+        "name_zh": "海伦"
+      },
+      {
+        "name_en": "Volume",
+        "tags": "volume (nikke), goddess of victory: nikke",
+        "name_zh": "沃伦姆"
+      },
+      {
+        "name_en": "Naga",
+        "tags": "naga (nikke), goddess of victory: nikke",
+        "name_zh": "娜嘉"
+      }
+    ]
+  },
+  {
+    "category_zh": "K-On!",
+    "category_en": "K-On!",
+    "items": [
+      {
+        "name_en": "Hirasawa Yui",
+        "tags": "hirasawa yui, k-on!",
+        "name_zh": "平泽唯"
+      },
+      {
+        "name_en": "Akiyama Mio",
+        "tags": "akiyama mio, k-on!",
+        "name_zh": "秋山澪"
+      },
+      {
+        "name_en": "Tainaka Ritsu",
+        "tags": "tainaka ritsu, k-on!",
+        "name_zh": "田井中律"
+      },
+      {
+        "name_en": "Kotobuki Tsumugi",
+        "tags": "kotobuki tsumugi, k-on!",
+        "name_zh": "琴吹䌷"
+      },
+      {
+        "name_en": "Nakano Azusa",
+        "tags": "nakano azusa, k-on!",
+        "name_zh": "中野梓"
+      }
+    ]
+  },
+  {
+    "category_zh": "赛马娘",
+    "category_en": "Umamusume",
+    "items": [
+      {
+        "name_en": "Curren Bouquetd'or",
+        "tags": "curren_bouquetd'or_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "机伶金花"
+      },
+      {
+        "name_en": "Vivlos",
+        "tags": "vivlos_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "强击"
+      },
+      {
+        "name_en": "Narita Taishin",
+        "tags": "narita_taishin_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "成田大进"
+      },
+      {
+        "name_en": "Special Week",
+        "tags": "special_week_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "特别周"
+      },
+      {
+        "name_en": "Silence Suzuka",
+        "tags": "silence_suzuka_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "无声铃鹿"
+      },
+      {
+        "name_en": "Tokai Teio",
+        "tags": "tokai_teio_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "东海帝王"
+      },
+      {
+        "name_en": "Mejiro McQueen",
+        "tags": "mejiro_mcqueen_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "目白麦昆"
+      },
+      {
+        "name_en": "Rice Shower",
+        "tags": "rice_shower_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "米浴"
+      },
+      {
+        "name_en": "Kitasan Black",
+        "tags": "kitasan_black_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "北部玄驹"
+      },
+      {
+        "name_en": "Satono Diamond",
+        "tags": "satono_diamond_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "里见光钻"
+      },
+      {
+        "name_en": "Gold Ship",
+        "tags": "gold_ship_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "黄金船"
+      },
+      {
+        "name_en": "Daiwa Scarlet",
+        "tags": "daiwa_scarlet_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "大和赤骥"
+      },
+      {
+        "name_en": "Vodka",
+        "tags": "vodka_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "伏特加"
+      },
+      {
+        "name_en": "Oguri Cap",
+        "tags": "oguri_cap_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "小栗帽"
+      },
+      {
+        "name_en": "Grass Wonder",
+        "tags": "grass_wonder_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "草上飞"
+      },
+      {
+        "name_en": "El Condor Pasa",
+        "tags": "el_condor_pasa_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "神鹰"
+      },
+      {
+        "name_en": "Symboli Rudolf",
+        "tags": "symboli_rudolf_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "鲁道夫象征"
+      },
+      {
+        "name_en": "Air Groove",
+        "tags": "air_groove_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "气槽"
+      },
+      {
+        "name_en": "Manhattan Cafe",
+        "tags": "manhattan_cafe_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "曼城茶座"
+      },
+      {
+        "name_en": "Mihono Bourbon",
+        "tags": "mihono_bourbon_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "美浦波旁"
+      },
+      {
+        "name_en": "Agnes Tachyon",
+        "tags": "agnes_tachyon_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "爱丽速子"
+      },
+      {
+        "name_en": "Curren Chan",
+        "tags": "curren_chan_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "真机伶"
+      },
+      {
+        "name_en": "Smart Falcon",
+        "tags": "smart_falcon_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "醒目飞鹰"
+      },
+      {
+        "name_en": "Daiichi Ruby",
+        "tags": "daiichi_ruby_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "第一红宝石"
+      },
+      {
+        "name_en": "Mejiro Ramonu",
+        "tags": "mejiro_ramonu_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "目白拉莫奴"
+      },
+      {
+        "name_en": "Gentildonna",
+        "tags": "gentildonna_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "贵妇人"
+      },
+      {
+        "name_en": "Neo Universe",
+        "tags": "neo_universe_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "新宇宙"
+      },
+      {
+        "name_en": "Winning Ticket",
+        "tags": "winning_ticket_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "胜利奖券"
+      },
+      {
+        "name_en": "Biwa Hayahide",
+        "tags": "biwa_hayahide_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "琵琶晨光"
+      },
+      {
+        "name_en": "Nice Nature",
+        "tags": "nice_nature_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "优秀素质"
+      },
+      {
+        "name_en": "Haru Urara",
+        "tags": "haru_urara_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "春乌拉拉"
+      },
+      {
+        "name_en": "Twin Turbo",
+        "tags": "twin_turbo_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "双涡轮"
+      },
+      {
+        "name_en": "Mejiro Bright",
+        "tags": "mejiro_bright_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "目白光明"
+      },
+      {
+        "name_en": "Daring Tact",
+        "tags": "daring_tact_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "谋勇兼备"
+      },
+      {
+        "name_en": "Copano Rickey",
+        "tags": "copano_rickey_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "小林历奇"
+      },
+      {
+        "name_en": "Dream Journey",
+        "tags": "dream_journey_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "梦之旅"
+      },
+      {
+        "name_en": "Orfevre",
+        "tags": "orfevre_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "黄金巨匠"
+      },
+      {
+        "name_en": "Almond Eye",
+        "tags": "almond_eye_(umamusume), umamusume, horse_ears, horse_tail",
+        "name_zh": "杏目"
+      }
+    ]
+  },
+  {
+    "category_zh": "明日方舟",
+    "category_en": "Arknights",
+    "items": [
+      {
+        "name_en": "Iris",
+        "tags": "iris_(arknights), arknights",
+        "name_zh": "爱丽丝"
+      },
+      {
+        "name_en": "Ray",
+        "tags": "ray_(arknights), arknights",
+        "name_zh": "莱伊"
+      },
+      {
+        "name_en": "Priestess",
+        "tags": "priestess_(arknights), arknights",
+        "name_zh": "普瑞赛斯"
+      },
+      {
+        "name_en": "Ambriel",
+        "tags": "ambriel_(arknights), arknights",
+        "name_zh": "安比尔"
+      },
+      {
+        "name_en": "Amiya",
+        "tags": "amiya (arknights), arknights",
+        "name_zh": "阿米娅"
+      },
+      {
+        "name_en": "Exusiai",
+        "tags": "exusiai (arknights), arknights",
+        "name_zh": "能天使"
+      },
+      {
+        "name_en": "Texas",
+        "tags": "texas (arknights), arknights",
+        "name_zh": "德克萨斯"
+      },
+      {
+        "name_en": "Lappland",
+        "tags": "lappland (arknights), arknights",
+        "name_zh": "拉普兰德"
+      },
+      {
+        "name_en": "Ch'en",
+        "tags": "chen (arknights), arknights",
+        "name_zh": "陈"
+      },
+      {
+        "name_en": "Skadi",
+        "tags": "skadi (arknights), arknights",
+        "name_zh": "斯卡蒂"
+      },
+      {
+        "name_en": "Kal'tsit",
+        "tags": "kal'tsit, arknights",
+        "name_zh": "凯尔希"
+      },
+      {
+        "name_en": "W",
+        "tags": "w (arknights), arknights",
+        "name_zh": "W"
+      },
+      {
+        "name_en": "Surtr",
+        "tags": "surtr (arknights), arknights",
+        "name_zh": "史尔特尔"
+      },
+      {
+        "name_en": "Mudrock",
+        "tags": "mudrock (arknights), arknights",
+        "name_zh": "泥岩"
+      },
+      {
+        "name_en": "Mostima",
+        "tags": "mostima (arknights), arknights",
+        "name_zh": "莫斯提马"
+      },
+      {
+        "name_en": "Eyjafjalla",
+        "tags": "eyjafjalla (arknights), arknights",
+        "name_zh": "艾雅法拉"
+      },
+      {
+        "name_en": "Nearl",
+        "tags": "nearl (arknights), arknights",
+        "name_zh": "临光"
+      },
+      {
+        "name_en": "Rosmontis",
+        "tags": "rosmontis (arknights), arknights",
+        "name_zh": "迷迭香"
+      },
+      {
+        "name_en": "Muelsyse",
+        "tags": "muelsyse (arknights), arknights",
+        "name_zh": "缪尔赛思"
+      },
+      {
+        "name_en": "Virtuosa",
+        "tags": "virtuosa (arknights), arknights",
+        "name_zh": "塑心"
+      }
+    ]
+  },
+  {
+    "category_zh": "饿殍：明末千里行",
+    "category_en": "The Hungry Lamb",
+    "items": [
+      {
+        "name_en": "Mansui",
+        "tags": "mansui_(the_hungry_lamb), the_hungry_lamb:_traveling_in_the_late_ming_dynasty",
+        "name_zh": "满穗"
+      }
+    ]
+  },
+  {
+    "category_zh": "公主连结",
+    "category_en": "Princess Connect",
+    "items": [
+      {
+        "name_en": "Neneka Summer",
+        "tags": "neneka_(princess_connect!), princess_connect!, swimsuit, bikini",
+        "name_zh": "泳装似似花"
+      },
+      {
+        "name_en": "Pecorine",
+        "tags": "pecorine, princess connect!",
+        "name_zh": "佩可莉姆"
+      },
+      {
+        "name_en": "Kokkoro",
+        "tags": "kokkoro, princess connect!",
+        "name_zh": "可可萝"
+      },
+      {
+        "name_en": "Karyl",
+        "tags": "karyl, princess connect!",
+        "name_zh": "凯露"
+      },
+      {
+        "name_en": "Yui",
+        "tags": "yui (princess connect!), princess connect!",
+        "name_zh": "优衣"
+      },
+      {
+        "name_en": "Saren",
+        "tags": "saren (princess connect!), princess connect!",
+        "name_zh": "咲恋"
+      },
+      {
+        "name_en": "Makoto",
+        "tags": "makoto (princess connect!), princess connect!",
+        "name_zh": "真琴"
+      },
+      {
+        "name_en": "Maho",
+        "tags": "maho (princess connect!), princess connect!",
+        "name_zh": "真步"
+      },
+      {
+        "name_en": "Ilya",
+        "tags": "ilya (princess connect!), princess connect!",
+        "name_zh": "伊莉亚"
+      },
+      {
+        "name_en": "Shizuru",
+        "tags": "shizuru (princess connect!), princess connect!",
+        "name_zh": "静流"
+      },
+      {
+        "name_en": "Neneka",
+        "tags": "neneka (princess connect!), princess connect!",
+        "name_zh": "似似花"
+      }
+    ]
+  },
+  {
+    "category_zh": "鸣潮",
+    "category_en": "Wuthering Waves",
+    "items": [
+      {
+        "name_en": "Phoebe",
+        "tags": "phoebe_(wuthering_waves), wuthering_waves",
+        "name_zh": "菲比"
+      },
+      {
+        "name_en": "Jinhsi",
+        "tags": "jinhsi_(wuthering_waves), wuthering_waves",
+        "name_zh": "今汐"
+      },
+      {
+        "name_en": "Female Rover",
+        "tags": "female rover, wuthering waves",
+        "name_zh": "女漂泊者"
+      },
+      {
+        "name_en": "Yangyang",
+        "tags": "yangyang (wuthering waves), wuthering waves",
+        "name_zh": "秧秧"
+      },
+      {
+        "name_en": "Chixia",
+        "tags": "chixia (wuthering waves), wuthering waves",
+        "name_zh": "炽霞"
+      },
+      {
+        "name_en": "Baizhi",
+        "tags": "baizhi (wuthering waves), wuthering waves",
+        "name_zh": "白芷"
+      },
+      {
+        "name_en": "Yinlin",
+        "tags": "yinlin (wuthering waves), wuthering waves",
+        "name_zh": "吟霖"
+      },
+      {
+        "name_en": "Changli",
+        "tags": "changli (wuthering waves), wuthering waves",
+        "name_zh": "长离"
+      },
+      {
+        "name_en": "Shorekeeper",
+        "tags": "shorekeeper (wuthering waves), wuthering waves",
+        "name_zh": "守岸人"
+      },
+      {
+        "name_en": "Camellya",
+        "tags": "camellya (wuthering waves), wuthering waves",
+        "name_zh": "椿"
+      },
+      {
+        "name_en": "Roccia",
+        "tags": "roccia (wuthering waves), wuthering waves",
+        "name_zh": "洛可可"
+      },
+      {
+        "name_en": "Carlotta",
+        "tags": "carlotta (wuthering waves), wuthering waves",
+        "name_zh": "珂莱塔"
+      },
+      {
+        "name_en": "Cantarella",
+        "tags": "cantarella (wuthering waves), wuthering waves",
+        "name_zh": "坎特蕾拉"
+      },
+      {
+        "name_en": "Zani",
+        "tags": "zani (wuthering waves), wuthering waves",
+        "name_zh": "赞妮"
+      },
+      {
+        "name_en": "Cartethyia",
+        "tags": "cartethyia (wuthering waves), wuthering waves",
+        "name_zh": "卡提希娅"
+      },
+      {
+        "name_en": "Lupa",
+        "tags": "lupa (wuthering waves), wuthering waves",
+        "name_zh": "露帕"
+      }
+    ]
+  },
+  {
+    "category_zh": "光之美少女",
+    "category_en": "Pretty Cure",
+    "items": [
+      {
+        "name_en": "Akechi Anna",
+        "tags": "akechi anna, cure answer, meitantei precure!, star detective precure!, pretty cure",
+        "name_zh": "明智安娜"
+      },
+      {
+        "name_en": "Kobayashi Mikuru",
+        "tags": "kobayashi mikuru, cure mystique, meitantei precure!, star detective precure!, pretty cure",
+        "name_zh": "小林美久留"
+      },
+      {
+        "name_en": "Moria Ruruka",
+        "tags": "moria ruruka, ruruka moria, cure arcana shadow, meitantei precure!, star detective precure!, pretty cure",
+        "name_zh": "森亚露露卡"
+      }
+    ]
+  },
+  {
+    "category_zh": "其他动漫",
+    "category_en": "Anime",
+    "items": [
+      {
+        "name_en": "Chisato Nishikigi",
+        "tags": "nishikigi chisato, lycoris recoil",
+        "name_zh": "锦木千束"
+      },
+      {
+        "name_en": "Takina Inoue",
+        "tags": "inoue takina, lycoris recoil",
+        "name_zh": "井之上泷奈"
+      },
+      {
+        "name_en": "Chizuru Mizuhara",
+        "tags": "mizuhara chizuru, kanojo okarishimasu",
+        "name_zh": "水原千鹤"
+      },
+      {
+        "name_en": "Makima",
+        "tags": "makima (chainsaw man), chainsaw man",
+        "name_zh": "玛奇玛"
+      },
+      {
+        "name_en": "Power",
+        "tags": "power (chainsaw man), chainsaw man",
+        "name_zh": "帕瓦"
+      },
+      {
+        "name_en": "Reze",
+        "tags": "reze (chainsaw man), chainsaw man",
+        "name_zh": "蕾塞"
+      },
+      {
+        "name_en": "Frieren",
+        "tags": "frieren, sousou no frieren",
+        "name_zh": "芙莉莲"
+      },
+      {
+        "name_en": "Fern",
+        "tags": "fern (sousou no frieren), sousou no frieren",
+        "name_zh": "菲伦"
+      },
+      {
+        "name_en": "Ubel",
+        "tags": "ubel (sousou no frieren), sousou no frieren",
+        "name_zh": "尤贝尔"
+      },
+      {
+        "name_en": "Hoshino Ai",
+        "tags": "hoshino ai, oshi no ko",
+        "name_zh": "星野爱"
+      },
+      {
+        "name_en": "Hoshino Ruby",
+        "tags": "hoshino ruby, oshi no ko",
+        "name_zh": "星野瑠美衣"
+      },
+      {
+        "name_en": "Arima Kana",
+        "tags": "arima kana, oshi no ko",
+        "name_zh": "有马加奈"
+      },
+      {
+        "name_en": "Rem",
+        "tags": "rem (re:zero), re:zero kara hajimeru isekai seikatsu",
+        "name_zh": "蕾姆"
+      },
+      {
+        "name_en": "Emilia",
+        "tags": "emilia (re:zero), re:zero kara hajimeru isekai seikatsu",
+        "name_zh": "爱蜜莉雅"
+      },
+      {
+        "name_en": "Megumin",
+        "tags": "megumin, kono subarashii sekai ni shukufuku wo!",
+        "name_zh": "惠惠"
+      },
+      {
+        "name_en": "Aqua",
+        "tags": "aqua (konosuba), kono subarashii sekai ni shukufuku wo!",
+        "name_zh": "阿库娅"
+      },
+      {
+        "name_en": "Kaguya Shinomiya",
+        "tags": "shinomiya kaguya, kaguya-sama wa kokurasetai",
+        "name_zh": "四宫辉夜"
+      },
+      {
+        "name_en": "Ai Hayasaka",
+        "tags": "hayasaka ai, kaguya-sama wa kokurasetai",
+        "name_zh": "早坂爱"
+      },
+      {
+        "name_en": "Gotoh Hitori",
+        "tags": "gotoh hitori, bocchi the rock!",
+        "name_zh": "后藤一里"
+      },
+      {
+        "name_en": "Kita Ikuyo",
+        "tags": "kita ikuyo, bocchi the rock!",
+        "name_zh": "喜多郁代"
+      },
+      {
+        "name_en": "Yamada Ryo",
+        "tags": "yamada ryo, bocchi the rock!",
+        "name_zh": "山田凉"
+      },
+      {
+        "name_en": "Ijichi Nijika",
+        "tags": "ijichi nijika, bocchi the rock!",
+        "name_zh": "伊地知虹夏"
+      },
+      {
+        "name_en": "Ayanami Rei",
+        "tags": "ayanami rei, neon genesis evangelion",
+        "name_zh": "绫波丽"
+      },
+      {
+        "name_en": "Asuka Langley",
+        "tags": "souryuu asuka langley, neon genesis evangelion",
+        "name_zh": "明日香"
+      },
+      {
+        "name_en": "Mari Makinami",
+        "tags": "mari makinami illustrious, neon genesis evangelion",
+        "name_zh": "真希波真理"
+      },
+      {
+        "name_en": "Kaname Madoka",
+        "tags": "kaname madoka, mahou shoujo madoka magica",
+        "name_zh": "鹿目圆"
+      },
+      {
+        "name_en": "Akemi Homura",
+        "tags": "akemi homura, mahou shoujo madoka magica",
+        "name_zh": "晓美焰"
+      },
+      {
+        "name_en": "Lucy",
+        "tags": "lucy (cyberpunk), cyberpunk edgerunners",
+        "name_zh": "露西"
+      },
+      {
+        "name_en": "Nakahara Mizuki",
+        "tags": "nakahara mizuki, lycoris recoil",
+        "name_zh": "中原瑞希"
+      },
+      {
+        "name_en": "Kurumi",
+        "tags": "kurumi (lycoris recoil), lycoris recoil",
+        "name_zh": "胡桃"
+      },
+      {
+        "name_en": "Nanami Mami",
+        "tags": "nanami mami, kanojo okarishimasu",
+        "name_zh": "七海麻美"
+      },
+      {
+        "name_en": "Sarashina Ruka",
+        "tags": "sarashina ruka, kanojo okarishimasu",
+        "name_zh": "更科瑠夏"
+      },
+      {
+        "name_en": "Sakurasawa Sumi",
+        "tags": "sakurasawa sumi, kanojo okarishimasu",
+        "name_zh": "樱泽墨"
+      },
+      {
+        "name_en": "Yaemori Mini",
+        "tags": "yaemori mini, kanojo okarishimasu",
+        "name_zh": "八重森迷你"
+      },
+      {
+        "name_en": "Himeno",
+        "tags": "himeno (chainsaw man), chainsaw man",
+        "name_zh": "姬野"
+      },
+      {
+        "name_en": "Higashiyama Kobeni",
+        "tags": "higashiyama kobeni, chainsaw man",
+        "name_zh": "东山小红"
+      },
+      {
+        "name_en": "Mitaka Asa",
+        "tags": "mitaka asa, chainsaw man",
+        "name_zh": "三鹰朝"
+      },
+      {
+        "name_en": "Yoru",
+        "tags": "yoru (chainsaw man), chainsaw man",
+        "name_zh": "夜"
+      },
+      {
+        "name_en": "Aura",
+        "tags": "aura (sousou no frieren), sousou no frieren",
+        "name_zh": "阿乌拉"
+      },
+      {
+        "name_en": "Linie",
+        "tags": "linie (sousou no frieren), sousou no frieren",
+        "name_zh": "莉涅"
+      },
+      {
+        "name_en": "Serie",
+        "tags": "serie (sousou no frieren), sousou no frieren",
+        "name_zh": "赛丽艾"
+      },
+      {
+        "name_en": "Kurokawa Akane",
+        "tags": "kurokawa akane, oshi no ko",
+        "name_zh": "黑川茜"
+      },
+      {
+        "name_en": "MEM-cho",
+        "tags": "mem-cho, oshi no ko",
+        "name_zh": "MEM啾"
+      },
+      {
+        "name_en": "Ram",
+        "tags": "ram (re:zero), re:zero kara hajimeru isekai seikatsu",
+        "name_zh": "拉姆"
+      },
+      {
+        "name_en": "Beatrice",
+        "tags": "beatrice (re:zero), re:zero kara hajimeru isekai seikatsu",
+        "name_zh": "碧翠丝"
+      },
+      {
+        "name_en": "Echidna",
+        "tags": "echidna (re:zero), re:zero kara hajimeru isekai seikatsu",
+        "name_zh": "艾姬多娜"
+      },
+      {
+        "name_en": "Darkness",
+        "tags": "darkness (konosuba), kono subarashii sekai ni shukufuku wo!",
+        "name_zh": "达克妮斯"
+      },
+      {
+        "name_en": "Wiz",
+        "tags": "wiz (konosuba), kono subarashii sekai ni shukufuku wo!",
+        "name_zh": "维兹"
+      },
+      {
+        "name_en": "Yunyun",
+        "tags": "yunyun, kono subarashii sekai ni shukufuku wo!",
+        "name_zh": "芸芸"
+      },
+      {
+        "name_en": "Fujiwara Chika",
+        "tags": "fujiwara chika, kaguya-sama wa kokurasetai",
+        "name_zh": "藤原千花"
+      },
+      {
+        "name_en": "Iino Miko",
+        "tags": "iino miko, kaguya-sama wa kokurasetai",
+        "name_zh": "伊井野弥子"
+      },
+      {
+        "name_en": "Hiroi Kikuri",
+        "tags": "hiroi kikuri, bocchi the rock!",
+        "name_zh": "广井菊里"
+      },
+      {
+        "name_en": "Katsuragi Misato",
+        "tags": "katsuragi misato, neon genesis evangelion",
+        "name_zh": "葛城美里"
+      },
+      {
+        "name_en": "Miki Sayaka",
+        "tags": "miki sayaka, mahou shoujo madoka magica",
+        "name_zh": "美树沙耶香"
+      },
+      {
+        "name_en": "Tomoe Mami",
+        "tags": "tomoe mami, mahou shoujo madoka magica",
+        "name_zh": "巴麻美"
+      },
+      {
+        "name_en": "Sakura Kyoko",
+        "tags": "sakura kyoko, mahou shoujo madoka magica",
+        "name_zh": "佐仓杏子"
+      },
+      {
+        "name_en": "Rebecca",
+        "tags": "rebecca (cyberpunk), cyberpunk edgerunners",
+        "name_zh": "瑞贝卡"
+      },
+      {
+        "name_en": "Kitagawa Marin",
+        "tags": "kitagawa marin, sono bisque doll wa koi wo suru",
+        "name_zh": "喜多川海梦"
+      },
+      {
+        "name_en": "Yor Forger",
+        "tags": "yor forger, spy x family",
+        "name_zh": "约尔·福杰"
+      },
+      {
+        "name_en": "Anya Forger",
+        "tags": "anya forger, spy x family",
+        "name_zh": "阿尼亚·福杰"
+      },
+      {
+        "name_en": "Zero Two",
+        "tags": "zero two (darling in the franxx), darling in the franxx",
+        "name_zh": "02"
+      },
+      {
+        "name_en": "Sakurajima Mai",
+        "tags": "sakurajima mai, seishun buta yarou",
+        "name_zh": "樱岛麻衣"
+      },
+      {
+        "name_en": "Roxy Migurdia",
+        "tags": "roxy migurdia, mushoku tensei",
+        "name_zh": "洛琪希"
+      },
+      {
+        "name_en": "Eris Boreas Greyrat",
+        "tags": "eris boreas greyrat, mushoku tensei",
+        "name_zh": "艾莉丝"
+      },
+      {
+        "name_en": "Kochou Shinobu",
+        "tags": "kochou shinobu, kimetsu no yaiba",
+        "name_zh": "蝴蝶忍"
+      },
+      {
+        "name_en": "Kanroji Mitsuri",
+        "tags": "kanroji mitsuri, kimetsu no yaiba",
+        "name_zh": "甘露寺蜜璃"
+      },
+      {
+        "name_en": "Kugisaki Nobara",
+        "tags": "kugisaki nobara, jujutsu kaisen",
+        "name_zh": "钉崎野蔷薇"
+      },
+      {
+        "name_en": "Mikasa Ackerman",
+        "tags": "mikasa ackerman, shingeki no kyojin",
+        "name_zh": "三笠·阿克曼"
+      }
+    ]
+  },
+  {
+    "category_zh": "魔法禁书目录",
+    "category_en": "Toaru Majutsu no Index",
+    "items": [
+      {
+        "name_zh": "御坂美琴",
+        "name_en": "Misaka Mikoto",
+        "tags": "misaka_mikoto, toaru majutsu no index, toaru kagaku no railgun, a certain scientific railgun, 1girl, short hair, brown hair, hazel eyes"
+      }
+    ]
+  }
+]

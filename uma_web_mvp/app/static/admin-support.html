@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户消息管理 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=private-support-messages1">
+</head>
+<body class="sub-page admin-support-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n="nav.back">返回</button>
+    <div class="sub-page-title">
+      <span data-i18n="admin_support.title">用户消息管理</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+    </div>
+  </header>
+
+  <main class="layout-single support-layout admin-support-layout">
+    <section class="panel support-admin-grid">
+      <aside class="support-admin-sidebar">
+        <h1 data-i18n="admin_support.create_title">发送站内消息</h1>
+        <form id="createThreadForm" class="stack">
+          <label><span data-i18n="admin_support.account_id">内部 account_id</span>
+            <input id="targetAccountId" maxlength="80" autocomplete="off">
+          </label>
+          <label><span data-i18n="admin_support.category">分类</span>
+            <select id="threadCategory">
+              <option value="general">general</option>
+              <option value="payment">payment</option>
+              <option value="feedback">feedback</option>
+              <option value="account">account</option>
+              <option value="generation">generation</option>
+              <option value="security">security</option>
+              <option value="other">other</option>
+            </select>
+          </label>
+          <label><span data-i18n="admin_support.priority">优先级</span>
+            <select id="threadPriority">
+              <option value="normal">normal</option>
+              <option value="important">important</option>
+              <option value="urgent">urgent</option>
+            </select>
+          </label>
+          <label><span data-i18n="admin_support.subject">主题</span>
+            <input id="threadSubject" maxlength="160">
+          </label>
+          <label><span data-i18n="admin_support.feedback_id">关联反馈 ID</span>
+            <input id="relatedFeedbackId" inputmode="numeric">
+          </label>
+          <label><span data-i18n="admin_support.topup_code">关联充值单号</span>
+            <input id="relatedTopupCode" maxlength="40">
+          </label>
+          <label><span data-i18n="admin_support.message">内容</span>
+            <textarea id="threadMessage" maxlength="2000" rows="6"></textarea>
+          </label>
+          <button id="createThreadBtn" class="primary" type="submit" data-i18n="admin_support.send">发送</button>
+          <div id="adminSupportMessage" class="message"></div>
+        </form>
+        <div class="support-account-picker">
+          <div class="support-admin-toolbar compact">
+            <input id="accountPickerFilter" placeholder="username / invite / email / ID">
+            <button id="loadAccountsBtn" class="ghost" type="button" data-i18n="admin_support.load_accounts">账号列表</button>
+          </div>
+          <div id="accountPickerList" class="support-thread-list"></div>
+        </div>
+      </aside>
+
+      <section class="support-admin-main">
+        <div class="support-admin-toolbar">
+          <input id="accountSearch" placeholder="account_id">
+          <select id="statusFilter">
+            <option value="" data-i18n="admin_support.all_status">全部状态</option>
+            <option value="open">open</option>
+            <option value="closed">closed</option>
+          </select>
+          <label class="check"><input id="unreadOnly" type="checkbox"> <span data-i18n="admin_support.unread_only">只看未读</span></label>
+          <button id="refreshThreadsBtn" class="ghost" type="button" data-i18n="common.refresh">刷新</button>
+        </div>
+        <div id="adminThreadList" class="support-thread-list admin-thread-list"></div>
+        <div id="adminThreadDetail" class="support-admin-detail"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/assets/i18n.js?v=private-support-messages1" defer></script>
+  <script src="/assets/admin-support.js?v=private-support-messages1" defer></script>
+</body>
+</html>

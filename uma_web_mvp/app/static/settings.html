@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设置/帮助 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=private-support-messages1">
+</head>
+<body class="sub-page">
+  <header class="topbar sub-page-topbar">
+    <button class="ghost back-btn" type="button" data-back-home data-i18n="nav.back">返回</button>
+    <div class="sub-page-title">
+      <span data-i18n="settings.title">设置/帮助</span>
+    </div>
+    <div class="sub-page-actions">
+      <span id="userName" class="sub-page-user"></span>
+      <span id="balance" class="sub-page-balance"></span>
+    </div>
+    <div class="nav-menu-wrap">
+      <button id="menuBtn" class="ghost menu-button" type="button" aria-expanded="false" aria-controls="navMenu">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        <span data-i18n="nav.menu">菜单</span>
+      </button>
+      <nav id="navMenu" class="nav-menu hidden" role="menu" aria-label="Main menu">
+        <a href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
+        <a href="/messages" role="menuitem" data-i18n="nav.messages">消息中心</a>
+        <a href="/topup" role="menuitem" data-i18n="nav.topup">充值</a>
+        <a href="/character-tags" role="menuitem" data-i18n="nav.character_tags">人物 Tag</a>
+        <a href="/feedback" role="menuitem" data-i18n="nav.feedback">用户反馈</a>
+        <a href="/change-password" role="menuitem" data-i18n="nav.change_password">修改密码</a>
+        <a href="/settings" role="menuitem" data-i18n="nav.settings">设置/帮助</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="layout-single">
+    <section class="panel form-panel settings-help-panel">
+      <h1 data-i18n="settings.title">设置/帮助</h1>
+
+      <section class="settings-info-section">
+        <h2 data-i18n="settings.about_title">网站说明</h2>
+        <p data-i18n="settings.about_text">小击击生图是一个基于 ComfyUI 的 AI 图片生成平台，复用 Discord Bot 的余额、队列与历史图片。</p>
+      </section>
+
+      <section class="settings-info-section">
+        <h2 data-i18n="settings.credits_title">Credits 说明</h2>
+        <ul class="settings-info-list">
+          <li data-i18n="app.cost_normal">普通生成：1 credit</li>
+          <li data-i18n="app.cost_anima">Anima 双采样：2 credits</li>
+          <li data-i18n="settings.smart_agent_cost">Smart Agent：10 credits</li>
+        </ul>
+      </section>
+
+      <section class="settings-info-section">
+        <h2 data-i18n="settings.topup_title">充值说明</h2>
+        <p data-i18n="settings.topup_text">支持微信扫码和 ASB Bank Transfer 两种充值方式。充值后需等待管理员确认收款方可到账。</p>
+        <a href="/topup" class="ghost settings-link" data-i18n="nav.topup">充值</a>
+      </section>
+
+      <section class="settings-info-section">
+        <h2 data-i18n="settings.privacy_title">隐私说明</h2>
+        <p data-i18n="settings.privacy_text">你生成的图片仅自己可见。管理员可通过后台查看任务记录用于排查问题。</p>
+      </section>
+
+      <section class="settings-info-section">
+        <h2 data-i18n="settings.contact_title">联系管理员</h2>
+        <p data-i18n="settings.contact_text">如遇问题，请通过用户反馈页面提交，管理员会尽快处理。</p>
+        <a href="/feedback" class="ghost settings-link" data-i18n="nav.feedback">用户反馈</a>
+      </section>
+
+      <div id="message" class="message"></div>
+    </section>
+  </main>
+
+  <script src="/assets/i18n.js?v=private-support-messages1" defer></script>
+  <script src="/assets/settings.js?v=private-support-messages1" defer></script>
+</body>
+</html>

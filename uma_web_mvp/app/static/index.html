@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=character-ambiguity-resolution2">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-wrap">
+      <div class="brand"><img class="brand-icon" src="/assets/branding/favicon-192x192.png?v=mizuhara" alt="小击击生图"><span class="brand-title brand-title-lines"><span>小击击</span><span>生图</span></span></div>
+    </div>
+    <div class="account">
+      <span id="devBadge" class="dev-badge hidden">本地开发模式</span>
+      <div class="mobile-user-row">
+        <span id="userName"></span>
+        <span id="balance"></span>
+      </div>
+      <div class="mobile-quick-row">
+        <button class="ghost lang-action" type="button" data-lang-toggle>English</button>
+        <button id="historyBtn" class="ghost action-button" type="button">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6m-8 4h10M7 13h10M7 17h6"/><path d="M9 3h6l1 2h3v16H5V5h3l1-2Z"/></svg>
+          <span data-i18n="nav.tasks">任务列表</span>
+          <span id="taskBadge" class="task-badge hidden">0</span>
+        </button>
+        <a id="profileTopBtn" class="ghost action-button mobile-only-action" href="/profile">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+          <span data-i18n="nav.profile">个人中心</span>
+        </a>
+        <button id="logoutBtn" class="ghost action-button hidden desktop-logout-action" type="button">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5"/><path d="M14 8l4 4-4 4"/><path d="M8 12h10"/></svg>
+          <span data-i18n="nav.logout">退出</span>
+        </button>
+      </div>
+      <div class="mobile-action-row">
+        <div class="nav-menu-wrap">
+          <button id="menuBtn" class="ghost action-button menu-button" type="button" aria-expanded="false" aria-controls="navMenu">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            <span data-i18n="nav.menu">菜单</span>
+          </button>
+          <nav id="navMenu" class="nav-menu hidden" role="menu" aria-label="Main menu">
+            <a href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
+            <a href="/profile" role="menuitem" data-i18n="nav.profile">个人中心</a>
+            <a href="/image-refund" role="menuitem" data-i18n="nav.image_refund">畸形图退款</a>
+            <a id="adminImageRefundLink" class="hidden" href="/admin/image-refunds" role="menuitem" data-i18n="nav.admin_image_refunds">畸形退款审核</a>
+            <a id="messagesNavLink" href="/messages" role="menuitem"><span data-i18n="nav.messages">消息中心</span><span id="supportUnreadBadge" class="support-unread-badge hidden">0</span></a>
+            <a href="/topup" role="menuitem" data-i18n="nav.topup">充值</a>
+            <a href="/character-tags" role="menuitem" data-i18n="nav.character_tags">人物 Tag</a>
+            <a href="/feedback" role="menuitem" data-i18n="nav.feedback">用户反馈</a>
+            <a href="/change-password" role="menuitem" data-i18n="nav.change_password">修改密码</a>
+            <a href="/settings" role="menuitem" data-i18n="nav.settings">设置/帮助</a>
+            <div class="menu-divider" aria-hidden="true"></div>
+            <a id="logoutMenuBtn" href="#" role="menuitem" data-i18n="nav.logout_full">退出登录</a>
+          </nav>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div id="welcomeBonusBanner" class="welcome-bonus hidden" role="status" data-i18n="app.welcome_bonus">欢迎！已赠送 10 credits，可用于体验生图。</div>
+    <section class="panel form-panel">
+      <h1 class="form-title" data-i18n="app.title_create">创建生图任务</h1>
+      <div class="credit-rules">
+        <span data-i18n="app.cost_normal">普通生成：1 credit</span>
+        <span data-i18n="app.cost_anima">Anima 双采样：2 credits</span>
+      </div>
+
+      <form id="generateForm" class="stack">
+        <div class="grid two">
+          <label><span data-i18n="app.mode">模式</span>
+            <select id="mode" name="mode">
+              <option value="txt2img" data-i18n="app.mode.txt2img">文生图</option>
+              <option value="img2img" data-i18n="app.mode.img2img">图生图</option>
+              <option value="controlnet" data-i18n="app.mode.controlnet">ControlNet</option>
+            </select>
+          </label>
+          <label><span data-i18n="app.style">画风 / 角色</span>
+            <select id="styleKey" name="style_key"></select>
+            <span class="field-hint" data-i18n="app.style_hint">推荐使用 Anima 双采样，出图效果更好。</span>
+          </label>
+        </div>
+
+        <label><span data-i18n="app.prompt_label">描述 / Prompt</span>
+          <textarea id="prompt" name="prompt" rows="7" maxlength="3000" placeholder="萌新可用中文，配合 Agent 翻译出图
+有能力可直接使用英文关键词，出图更精准
+不使用 Agent 出图更快" data-i18n-placeholder="app.prompt_placeholder"></textarea>
+        </label>
+        <div class="row">
+          <label class="check agent-check">
+            <input id="agentToggle" type="checkbox">
+            <span data-i18n="app.agent">使用 Agent 润色/翻译</span>
+          </label>
+          <span id="agentHint" class="muted"></span>
+        </div>
+
+        <div class="grid two">
+          <label><span data-i18n="app.dimension">画幅</span>
+            <select id="dimensionPreset" name="dimension_preset">
+              <option value="1024x1536" data-i18n="app.dimension.portrait">推荐竖图：1024 × 1536</option>
+              <option value="1536x1356" data-i18n="app.dimension.large">推荐大图：1536 × 1356</option>
+              <option value="1536x1024" data-i18n="app.dimension.landscape">推荐横图：1536 × 1024</option>
+              <option value="1024x1024" data-i18n="app.dimension.square">正方形：1024 × 1024</option>
+              <option value="custom" data-i18n="app.dimension.custom">自定义画幅</option>
+            </select>
+          </label>
+          <label><span data-i18n="app.lora">LoRA 权重</span>
+            <input id="loraWeight" name="lora_weight" type="number" value="1.0" min="0" max="2" step="0.05">
+            <span class="field-hint" data-i18n="app.lora_hint">建议 LoRA 权重保持在 0.7～1 之间。</span>
+          </label>
+        </div>
+
+        <div id="customDimensions" class="grid two hidden">
+          <label><span data-i18n="app.width">宽度</span><input id="width" name="width" type="number" value="1024" min="512" max="2048" step="4"></label>
+          <label><span data-i18n="app.height">高度</span><input id="height" name="height" type="number" value="1536" min="512" max="2048" step="4"></label>
+        </div>
+
+        <div id="imageOptions" class="conditional hidden">
+          <label><span data-i18n="app.input_image">参考图 / 控制图</span><input id="inputImage" name="input_image" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <label><span data-i18n="app.denoise">Denoise / 控制强度</span><input id="denoise" name="denoise" type="number" value="0.5" min="0" max="1" step="0.05"></label>
+        </div>
+
+        <div id="controlOptions" class="conditional hidden grid two">
+          <label><span data-i18n="app.control_type">控制类型</span>
+            <select id="controlType" name="control_type">
+              <option value="depth">Depth 深度</option>
+              <option value="pose">Pose 姿态</option>
+            </select>
+          </label>
+          <label><span data-i18n="app.character_source">角色来源</span><select id="controlCharacter" name="control_character"></select></label>
+          <label class="check"><input id="autoTagger" name="auto_tagger" type="checkbox"> <span data-i18n="app.auto_tagger">使用 WD14 自动反推原图</span></label>
+        </div>
+
+        <div id="queueStatus" class="queue-status" aria-live="polite"></div>
+        <button id="submitBtn" class="primary" type="submit" data-i18n="app.submit">加入队列</button>
+        <div id="message" class="message"></div>
+      </form>
+    </section>
+
+    <section id="currentTaskPanel" class="panel current-task-panel">
+      <h2 data-i18n="app.current_task">当前任务</h2>
+      <div id="currentTask" class="current-task-content"></div>
+    </section>
+  </main>
+
+  <!-- Task Drawer -->
+  <div id="historyOverlay" class="drawer-overlay hidden"></div>
+  <aside id="historyDrawer" class="drawer hidden">
+    <div class="drawer-header">
+      <div class="drawer-title-block">
+        <h2 data-i18n="nav.tasks">任务列表</h2>
+        <p data-i18n="app.drawer_hint">点击任务可切换主视图</p>
+      </div>
+      <button id="drawerCloseBtn" class="ghost" type="button">✕</button>
+    </div>
+    <div id="historyList" class="drawer-body"></div>
+    <div class="drawer-footer">
+      <button id="loadMoreBtn" class="ghost" type="button" data-i18n="app.load_more">加载更多</button>
+    </div>
+  </aside>
+
+  <!-- Agent error dialog -->
+  <div id="agentErrorDialog" class="dialog-overlay hidden">
+    <div class="dialog">
+      <p id="agentErrorText"></p>
+      <div class="dialog-actions">
+        <button id="agentRetryBtn" class="secondary" type="button" data-i18n="app.retry_agent">重新尝试</button>
+        <button id="agentUseOriginalBtn" class="primary" type="button" data-i18n="app.use_original">使用原 Prompt 提交</button>
+        <button id="agentCancelBtn" class="ghost" type="button" data-i18n="app.cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="characterResolutionDialog" class="dialog-overlay hidden">
+    <div class="dialog character-resolution-dialog" role="dialog" aria-modal="true" aria-labelledby="characterResolutionTitle">
+      <h3 id="characterResolutionTitle" data-i18n="character_resolution.title">请选择具体人物</h3>
+      <p id="characterResolutionIntro" class="muted"></p>
+      <div id="characterResolutionGroups" class="character-resolution-groups"></div>
+      <div id="characterResolutionError" class="form-msg error hidden"></div>
+      <div class="dialog-actions">
+        <button id="characterResolutionCancelBtn" class="ghost" type="button" data-i18n="app.cancel">取消</button>
+        <button id="characterResolutionConfirmBtn" class="primary" type="button" data-i18n="character_resolution.confirm_continue">确认并继续生成</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="supportImportantDialog" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3 data-i18n="support.important_title">管理员消息</h3>
+      <p id="supportImportantSubject"></p>
+      <p id="supportImportantBody"></p>
+      <div class="dialog-actions">
+        <button id="supportViewBtn" class="primary" type="button" data-i18n="support.view">查看消息</button>
+        <button id="supportLaterBtn" class="ghost" type="button" data-i18n="support.later">稍后处理</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="topupSubmitReminderDialog" class="dialog-overlay hidden">
+    <div class="dialog">
+      <h3 data-i18n="topup.submit_reminder.title">充值订单尚未提交审核</h3>
+      <p id="topupSubmitReminderBody"></p>
+      <div class="dialog-actions">
+        <button id="topupSubmitGoBtn" class="primary" type="button" data-i18n="topup.submit_reminder.go">去提交审核</button>
+        <button id="topupSubmitLaterBtn" class="ghost" type="button" data-i18n="topup.submit_reminder.later">稍后处理</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="referralCampaignDialog" class="dialog-overlay hidden">
+    <div class="dialog launch-dialog" role="dialog" aria-modal="true" aria-labelledby="referralCampaignTitle">
+      <h3 id="referralCampaignTitle" data-i18n="referral.title">邀请好友，双方领取 Credits</h3>
+      <p data-i18n="referral.body">前往“菜单 → 个人中心”领取专属邀请码。
+好友使用你的邀请码注册：好友在原有新用户 10 credits 基础上，再获得 10 credits；你获得 20 credits；邀请人数不限，邀请码长期有效。</p>
+      <div class="dialog-actions">
+        <button id="referralCampaignGoBtn" class="primary" type="button" data-i18n="referral.claim_now">立即领取</button>
+        <button id="referralCampaignLaterBtn" class="ghost" type="button" data-i18n="referral.later">稍后再说</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="smartAgentLaunchDialog" class="dialog-overlay hidden">
+    <div class="dialog launch-dialog" role="dialog" aria-modal="true" aria-labelledby="smartAgentLaunchTitle">
+      <h3 id="smartAgentLaunchTitle" data-i18n="smart.launch_title">智能 Agent 正式上线</h3>
+      <p data-i18n="smart.launch_body">现在可以与小击击一起讨论生图灵感、优化提示词、匹配角色 Tag、工作流、LoRA 和画幅。你可以先聊方案，确认后再提交生图任务。</p>
+      <p class="launch-cost" data-i18n="smart.launch_cost">普通讨论不扣 credits，只有确认提交生图任务时才扣 10 credits。</p>
+      <div class="dialog-actions">
+        <button id="smartAgentLaunchGoBtn" class="primary" type="button" data-i18n="smart.launch_try">立即体验</button>
+        <button id="smartAgentLaunchLaterBtn" class="ghost" type="button" data-i18n="smart.launch_later">稍后再说</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/i18n.js?v=character-ambiguity-resolution2" defer></script>
+  <script src="/assets/copy-to-clipboard.js?v=fix-api-error-display-1" defer></script>
+  <script src="/assets/app.js?v=character-ambiguity-resolution2" defer></script>
+</body>
+</html>

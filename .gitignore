@@ -1,0 +1,86 @@
+# ===== Environment & Secrets =====
+**/.env
+**/.env.*
+!**/.env.example
+**/.env.local
+**/.env.production
+**/.env.development
+**/.env.redis-test-backup
+
+# ===== Database =====
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# ===== Logs =====
+**/*.log
+**/logs/
+**/uvicorn_error.log
+**/uvicorn_out.log
+
+# ===== Python =====
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.venv/
+**/venv/
+**/env/
+**/.pytest_cache/
+**/.mypy_cache/
+
+# ===== Node =====
+**/node_modules/
+
+# ===== Backups (all backup dirs at any level) =====
+**/*backup*/
+**/_backup*/
+**/*.bak
+**/*.bak-*
+**/*.bak_*
+
+# ===== Temp & Cache =====
+**/tmp/
+**/temp/
+**/cache/
+**/.cache/
+**/*.tmp
+**/tmp_*.db
+**/test-results/
+
+# ===== IDE =====
+**/.idea/
+**/.vscode/
+
+# ===== OS =====
+**/.DS_Store
+**/Thumbs.db
+
+# ===== Security =====
+**/*.pem
+**/*.key
+**/*.p12
+**/id_rsa
+**/id_ed25519
+
+# ===== Local diagnostic reports =====
+**/FIX_REPORT_*.md
+**/*_LOCAL_REPORT.md
+**/*_RUNTIME_REPORT.md
+**/security-scan*.txt
+**/secret-scan*.txt
+
+# ===== Test scripts (contain local paths) =====
+**/_test_*.py
+**/_find_task.py
+**/_reject_order.py
+**/decrypt_test.py
+**/test_boundary_fix.py
+
+# ===== Project-specific =====
+**/main.py.bak_fix
+**/bot_web_mvp.py
+**/bot_web_mvp.patch
+**/_apply_*.py
+**/_security_cleanup.py
+**/smart_agent_test_*.db

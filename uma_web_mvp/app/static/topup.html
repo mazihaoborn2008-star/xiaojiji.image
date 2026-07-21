@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>充值 - 小击击生图</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/styles.css?v=private-support-messages1">
+</head>
+<body class="topup-page">
+  <header class="topbar topup-topbar">
+    <a href="/" class="ghost topup-back-link" data-i18n-aria-label="topup.back_label" aria-label="返回">←</a>
+    <div class="topup-user-summary">
+      <span id="userName"></span>
+      <span id="balance"></span>
+    </div>
+    <div class="topup-header-actions">
+      <div class="nav-menu-wrap">
+        <button id="menuBtn" class="ghost menu-button" type="button" aria-expanded="false" aria-controls="navMenu">
+          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          <span data-i18n="nav.menu">菜单</span>
+        </button>
+        <nav id="navMenu" class="nav-menu hidden" role="menu" aria-label="Main menu">
+          <a href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
+          <a href="/messages" role="menuitem" data-i18n="nav.messages">消息中心</a>
+          <a href="/topup" role="menuitem" data-i18n="nav.topup">充值</a>
+          <a href="/character-tags" role="menuitem" data-i18n="nav.character_tags">人物 Tag</a>
+          <a href="/feedback" role="menuitem" data-i18n="nav.feedback">用户反馈</a>
+          <a href="/change-password" role="menuitem" data-i18n="nav.change_password">修改密码</a>
+          <a href="/settings" role="menuitem" data-i18n="nav.settings">设置/帮助</a>
+        </nav>
+      </div>
+    </div>
+    <p class="topup-confirm-hint" data-i18n="topup.confirm_hint">充值后需等待管理员确认收款方可到账</p>
+  </header>
+
+  <main class="layout topup-layout">
+    <section class="panel form-panel">
+      <h1 data-i18n="topup.title">发起充值</h1>
+      <form id="topupForm" class="stack">
+        <fieldset id="paymentChoicePanel" class="payment-methods">
+          <legend data-i18n="topup.choose_method">支付方式 / Payment method</legend>
+          <label class="payment-option">
+            <input type="radio" name="payment_method" value="wechat_qr" checked>
+            <span>微信扫码</span>
+          </label>
+          <label class="payment-option">
+            <input type="radio" name="payment_method" value="asb_bank_transfer">
+            <span>ASB Bank Transfer</span>
+          </label>
+        </fieldset>
+
+        <div id="wechatCreatePanel" class="stack payment-create-panel hidden">
+          <button id="wechatBackBtn" class="ghost payment-back" type="button">返回付款方式</button>
+          <div class="payment-rules wechat-rules">
+            <strong>支付方式：微信扫码</strong>
+            <p>价格说明：</p>
+            <p>1 元 = 100 credits</p>
+            <p>普通生成消耗 1 credit</p>
+            <p>Anima 双采样消耗 2 credits</p>
+            <p>付款完成后点击"我已付款"。管理员确认到账后会为你加 credits。</p>
+          </div>
+          <label><span>充值金额（RMB）</span>
+            <input id="amountInput" type="number" min="1" max="500" step="0.01" value="10" autocomplete="off">
+          </label>
+        </div>
+
+        <div id="asbCreatePanel" class="stack payment-create-panel hidden">
+          <button id="asbBackBtn" class="ghost payment-back" type="button">Back to payment methods</button>
+          <div class="payment-rules asb-rules">
+            <strong>Payment method: ASB Bank Transfer</strong>
+            <p>Pricing:</p>
+            <div class="asb-pricing">
+              <span>100 credits = NZD $1.00</span>
+              <span>200 credits = NZD $2.00</span>
+              <span>500 credits = NZD $5.00</span>
+              <span>1000 credits = NZD $10.00</span>
+              <span>Normal generation: 1 credit</span>
+              <span>Anima Double Sample: 2 credits</span>
+            </div>
+          </div>
+          <label>ASB packages
+            <select id="asbCredits">
+              <option value="100">100 credits - NZD $1.00</option>
+              <option value="200">200 credits - NZD $2.00</option>
+              <option value="500">500 credits - NZD $5.00</option>
+              <option value="1000">1000 credits - NZD $10.00</option>
+            </select>
+          </label>
+        </div>
+        <button id="createTopupBtn" class="primary" type="submit">确认付款方式</button>
+        <div id="message" class="message"></div>
+      </form>
+
+      <div id="activeOrder" class="topup-active hidden"></div>
+    </section>
+
+    <section id="wechatQrPanel" class="panel current-task-panel hidden">
+      <h2>微信收款码</h2>
+      <div class="qr-box">
+        <img id="paymentQr" src="/api/payment-qr?v=20260717" alt="收款码">
+      </div>
+      <p class="muted">付款时请按充值单金额支付。网站不会自动到账，提交已付款后等待管理员确认并加 credits。</p>
+    </section>
+
+    <section id="topupHistoryPanel" class="panel topup-history-panel hidden">
+      <h2 data-i18n="topup.history">充值记录</h2>
+      <div id="topupList" class="topup-list"></div>
+    </section>
+  </main>
+
+  <div id="topupTimeNotice" class="modal-backdrop topup-time-notice hidden" role="dialog" aria-modal="true" aria-labelledby="topupTimeNoticeTitle">
+    <div class="modal-card">
+      <button id="topupTimeNoticeClose" class="modal-close" type="button" aria-label="关闭">&times;</button>
+      <h2 id="topupTimeNoticeTitle" data-i18n="topup.time_notice.title">充值时间提醒</h2>
+      <p id="topupTimeNoticeBody"></p>
+      <div class="dialog-actions">
+        <button id="topupTimeNoticeOk" class="primary" type="button" data-i18n="topup.time_notice.ok">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/i18n.js?v=private-support-messages1" defer></script>
+  <script src="/assets/topup.js?v=fix-pc-topup-entry2" defer></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>智能 Agent</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
+  <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
+  <link rel="stylesheet" href="/assets/smart-agent.css?v=smart-agent-flow-fix2">
+</head>
+<body>
+  <div class="page">
+    <header class="topbar">
+      <button class="back-btn" type="button" id="backBtn" data-i18n="nav.back">返回</button>
+      <div class="title-wrap">
+        <div class="title" data-i18n="smart.title">智能 Agent</div>
+        <div class="sub" data-i18n="smart.intro_short">小击击会帮你匹配角色 Tag、提示词、工作流、LoRA 和画幅</div>
+        <button class="about-btn" type="button" id="aboutBtn" data-i18n="smart.about">功能介绍</button>
+      </div>
+      <div class="credit" id="balance">-- credits</div>
+    </header>
+
+    <nav class="agent-menu">
+      <button class="menu-btn" type="button" id="newChatBtn" data-i18n="smart.new_chat">新聊天</button>
+      <button class="menu-btn" type="button" id="clearMemBtn" data-i18n="smart.clear_memory">清空记忆</button>
+      <button class="menu-btn" type="button" id="historyBtn" data-i18n="smart.history">历史聊天</button>
+      <div class="history-panel" id="historyPanel" role="menu" aria-label="Smart Agent conversations"></div>
+    </nav>
+
+    <section class="chat-card">
+      <div id="smartErrorBanner" class="smart-error-banner" role="status"></div>
+      <div class="messages" id="chatMessages" role="log" aria-live="polite"></div>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="chatInput" rows="1" maxlength="2000" inputmode="text" enterkeyhint="send" autocomplete="off" autocapitalize="sentences" data-i18n-placeholder="smart.chat.placeholder" placeholder="描述你想生成的画面..."></textarea>
+          <button class="send-btn" id="sendBtn" type="submit" data-i18n="smart.send">发送</button>
+        </form>
+        <div class="hint" data-i18n="smart.real_hint">Enter 发送，Shift + Enter 换行。只有小击击真正提交生图任务时才扣 10 credits。</div>
+      </div>
+    </section>
+  </div>
+
+  <div id="aboutDialog" class="about-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="aboutDialogTitle">
+    <div class="about-card" role="document">
+      <button class="about-close" id="aboutCloseBtn" type="button" aria-label="Close">×</button>
+      <h2 id="aboutDialogTitle" data-i18n="smart.about_title">智能 Agent 功能介绍</h2>
+      <p data-i18n="smart.intent_intro">与小击击共同探讨场景、服饰、表情、动作和构图等生图细节，获得更快速、更丰富、更细致的提示词翻译与创意建议；确认方案后，再生成更理想的作品。</p>
+      <p class="about-cost" data-i18n="smart.intent_cost_hint">讨论和调整不扣 credits，只有确认提交生图任务时才扣 10 credits。</p>
+      <div class="about-actions">
+        <button class="about-ok" id="aboutOkBtn" type="button" data-i18n="smart.about_ok">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/i18n.js?v=copy-image-1" defer></script>
+  <script src="/assets/copy-to-clipboard.js?v=copy-image-1" defer></script>
+  <script src="/assets/smart-agent.js?v=smart-agent-flow-fix2" defer></script>
+</body>
+</html>
