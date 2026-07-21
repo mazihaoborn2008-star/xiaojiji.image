@@ -21,6 +21,7 @@ let lastViewportTop = 0;
 let activePromptVersion = 0;
 let sendingLock = false;
 let confirmingLock = false;
+let turnInFlight = false;
 
 const AVATAR_SRC = "/assets/branding/favicon-32x32.png?v=mizuhara";
 const POLL_VISIBLE_MS = 1000;
@@ -438,14 +439,6 @@ function renderPromptReadyCard(payload) {
   message.className = "prompt-ready-message";
   message.textContent = payload.message || t("smart.prompt_ready_message", "提示词已整理完成，是否现在开始生成？");
 
-  const details = document.createElement("details");
-  details.className = "prompt-ready-details";
-  const summary = document.createElement("summary");
-  summary.textContent = t("smart.prompt_ready_view", "查看最终 Prompt");
-  const prompt = document.createElement("pre");
-  prompt.textContent = payload.prompt || "";
-  details.append(summary, prompt);
-
   const actions = document.createElement("div");
   actions.className = "prompt-ready-actions";
   const generateBtn = document.createElement("button");
@@ -465,7 +458,7 @@ function renderPromptReadyCard(payload) {
 
   const status = document.createElement("div");
   status.className = "prompt-ready-status";
-  bubble.append(message, details, actions, status);
+  bubble.append(message, actions, status);
   appendMessageNode(container, row);
 }
 
@@ -576,6 +569,8 @@ async function sendDisambiguationChoice(clickedBtn, allButtons, characterKey, di
   const userDisplay = displayName || characterKey;
   addUserBubble(userDisplay, "sent");
   showTyping();
+  turnInFlight = true;
+  setComposerBusy(true);
 
   try {
     const requestId = `smart-disambig-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -584,10 +579,15 @@ async function sendDisambiguationChoice(clickedBtn, allButtons, characterKey, di
       headers: { "Content-Type": "application/json", "X-Client-Request-Id": requestId },
       body: JSON.stringify({ character_key: characterKey, group_id: groupId || "" }),
     });
-    if (data.processing || data.job_code) startPolling();
+    if (data.processing || data.job_code) {
+      startPolling();
+    } else {
+      finishTurnUi();
+    }
     // 成功后刷新 pending 状态，卡片将变为 resolved
     await refreshMe();
   } catch (e) {
+    finishTurnUi();
     hideTyping();
     // 失败时恢复按钮，不把卡片永久变灰
     buttons.forEach((btn) => { btn.disabled = false; });
@@ -690,6 +690,8 @@ function resetConversationUiState() {
   hideTyping();
   confirmingLock = false;
   sendingLock = false;
+  turnInFlight = false;
+  setComposerBusy(false);
   window._pendingDisambiguationActive = undefined;
 }
 
@@ -885,10 +887,19 @@ function hideTyping() {
 }
 
 function setComposerBusy(isBusy) {
+  const busy = Boolean(isBusy);
   const input = $("chatInput");
   const button = $("sendBtn");
-  if (input) input.disabled = false;
-  if (button) button.disabled = false;
+  if (input) input.disabled = busy;
+  if (button) button.disabled = busy;
+}
+
+function finishTurnUi() {
+  turnInFlight = false;
+  sendingLock = false;
+  setComposerBusy(false);
+  const input = $("chatInput");
+  if (input && !isMobileSmartAgent()) input.focus({ preventScroll: true });
 }
 
 function resetComposerState() {
@@ -1142,7 +1153,7 @@ async function syncLatestEvents(renderMessages = true) {
             renderDisambiguationCard(ev.public_message);
           }
         } else if (ev.event_type === "prompt_ready") {
-          if (!generatedAfterLatestPrompt && ev === latestPromptReady) {
+          if (!config?.v2_enabled && !generatedAfterLatestPrompt && ev === latestPromptReady) {
             renderPromptReadyCard(parsePromptReadyPayload(ev.public_message));
           }
         }
@@ -1226,6 +1237,7 @@ function renderEvent(ev) {
   if (ev.event_type === "done") {
     updateFirstUserMessageStatus(["processing", "pending", "sent"], "done");
     hideTyping();
+    finishTurnUi();
     return;
   }
   if (ev.event_type === "assistant_message") {
@@ -1236,18 +1248,23 @@ function renderEvent(ev) {
   if (ev.event_type === "prompt_ready") {
     hideTyping();
     updateFirstUserMessageStatus(["processing", "pending", "sent"], "done");
-    renderPromptReadyCard(parsePromptReadyPayload(ev.public_message));
+    if (!config?.v2_enabled) {
+      renderPromptReadyCard(parsePromptReadyPayload(ev.public_message));
+    }
+    finishTurnUi();
     return;
   }
   if (ev.event_type === "character_disambiguation") {
     hideTyping();
     updateFirstUserMessageStatus(["processing", "pending", "sent"], "done");
     renderDisambiguationCard(ev.public_message);
+    finishTurnUi();
     return;
   }
   if (ev.event_type === "generated") {
     hideTyping();
     updateFirstUserMessageStatus(["processing", "pending", "sent"], "done");
+    finishTurnUi();
     if (ev.public_message) addAssistantBubbleOnce(ev.public_message, { jobCode: ev.job_code });
     if (ev.job_code) {
       activeJobCodes.add(ev.job_code);
@@ -1267,6 +1284,7 @@ function renderEvent(ev) {
     hideTyping();
     if (ev.event_type === "queued") {
       updateFirstUserMessageStatus(["processing", "pending", "sent"], "done");
+      finishTurnUi();
     }
     const message = ev.public_message || generationStatusLabel(ev.event_type);
     updateGenerationCardStatus(ev.job_code, message, { error: ["failed", "refunded", "error"].includes(ev.event_type) });
@@ -1276,6 +1294,7 @@ function renderEvent(ev) {
     hideTyping();
     updateFirstUserMessageStatus(["processing", "pending", "sent"], "failed");
     addErrorBubble(ev.public_message || t("smart.failed", "暂时无法创建 Smart Agent 任务。"));
+    finishTurnUi();
     return;
   }
   if (ev.public_message) addOrUpdateEvent(ev.event_type, ev.public_message);
@@ -1311,7 +1330,7 @@ async function pollTaskForImages(jobCode) {
 }
 
 async function sendMessage() {
-  if (sendingLock) return;
+  if (sendingLock || turnInFlight) return;
   const input = $("chatInput");
   const button = $("sendBtn");
   if (!input || !button || !convCode) return;
@@ -1319,6 +1338,9 @@ async function sendMessage() {
   if (!text) return;
 
   sendingLock = true;
+  turnInFlight = true;
+  setComposerBusy(true);
+  let keepLocked = true;
   input.value = "";
   autoResizeInput();
   const localStatus = addUserBubble(text, "sent");
@@ -1337,14 +1359,19 @@ async function sendMessage() {
       addAssistantBubbleOnce(data.assistant_message, { jobCode: data.job_code });
     }
     if (data.job_code) activeJobCodes.add(data.job_code);
-    if (data.processing || data.job_code || data.draft_ready) startPolling();
+    if (data.processing || data.job_code || data.draft_ready) {
+      startPolling();
+    } else {
+      keepLocked = false;
+    }
     await refreshMe();
   } catch (e) {
+    keepLocked = false;
     setStatusNode(localStatus, "failed");
     addErrorBubble(friendlyError(e.message) || "发送失败");
   } finally {
     sendingLock = false;
-    input.focus();
+    if (!keepLocked) finishTurnUi();
   }
 }
 

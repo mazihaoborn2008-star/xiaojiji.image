@@ -191,6 +191,16 @@ from .smart_agent.workflow_registry import get_workflow, warm_workflow_index, wo
 from .smart_agent.lora_registry import lora_summaries, sanitize_loras
 from .smart_agent.resolution_registry import get_resolution_or_default, ALLOWED_RESOLUTIONS, DEFAULT_RESOLUTION_KEY
 from .smart_agent.dynamic_workflows import SMART_AGENT_DEFAULT_WORKFLOW_KEY
+from .smart_agent.v2_protocol import prepare_turn, safe_prompt_hidden_reply
+from .smart_agent.v2_store import (
+    abort_turn,
+    begin_turn_atomic,
+    bind_turn_message,
+    clear_v2_state,
+    has_active_turn,
+    save_message_resolution,
+)
+from .smart_agent.v2_worker import process_smart_agent_turn_v2
 
 app = FastAPI(title="UMA Web MVP", docs_url=None, redoc_url=None)
 settings = get_settings()
@@ -2170,6 +2180,7 @@ def smart_agent_config(user: UserSession = Depends(get_current_user), s: Setting
         "enabled": bool(s.smart_agent_enabled),
         "cost_credits": int(s.smart_agent_cost_credits),
         "image_only": True,
+        "v2_enabled": bool(getattr(s, "smart_agent_v2_enabled", False)),
     }
 
 
@@ -2244,6 +2255,8 @@ def create_smart_agent_task(
     user: UserSession = Depends(get_current_user),
     s: Settings = Depends(get_settings),
 ):
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        raise HTTPException(status_code=409, detail="Smart Agent V2 请通过聊天消息提交。")
     if not s.smart_agent_enabled:
         raise HTTPException(status_code=403, detail="Smart Agent 暂未开放")
     if not s.deepseek_api_key:
@@ -2337,6 +2350,16 @@ def get_smart_agent_conversation(
         }
         for m in messages
     ]
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        for item in safe_messages:
+            content = str(item.get("content") or "")
+            if item.get("role") == "assistant" and (
+                content.startswith("这是为你整理的英文提示词")
+                or "当前 Prompt:" in content
+                or "当前 prompt:" in content.lower()
+            ):
+                item["content"] = safe_prompt_hidden_reply()
+
     # Check pending disambiguation
     pending_dis = get_pending_disambiguation_json(s, conversation_id=conv["id"])
     return {
@@ -3832,7 +3855,7 @@ def _save_character_draft(
         conn.close()
 
 
-async def _process_smart_agent_chat_message(
+async def _process_smart_agent_chat_message_legacy(
     *,
     s: Settings,
     conversation_code: str,
@@ -4914,6 +4937,53 @@ async def _process_smart_agent_chat_message(
                 pass
 
 
+
+async def _process_smart_agent_chat_message(
+    *,
+    s: Settings,
+    conversation_code: str,
+    conversation_id: int,
+    legacy_id: str,
+    username: str,
+    user_public_id: str,
+    user_msg: str,
+    resolved_intent: str,
+    client_request_id: str | None,
+    message_id: int | None = None,
+) -> None:
+    """Feature-flagged Smart Agent dispatcher.
+
+    V2 owns only the conversational planning path. Queue creation, billing,
+    task IDs and ComfyUI execution stay in the existing server/database code.
+    """
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        await process_smart_agent_turn_v2(
+            s=s,
+            conversation_code=conversation_code,
+            conversation_id=conversation_id,
+            legacy_id=legacy_id,
+            username=username,
+            user_public_id=user_public_id,
+            user_msg=user_msg,
+            resolved_intent=resolved_intent,
+            client_request_id=client_request_id,
+            message_id=message_id,
+        )
+        return
+    await _process_smart_agent_chat_message_legacy(
+        s=s,
+        conversation_code=conversation_code,
+        conversation_id=conversation_id,
+        legacy_id=legacy_id,
+        username=username,
+        user_public_id=user_public_id,
+        user_msg=user_msg,
+        resolved_intent=resolved_intent,
+        client_request_id=client_request_id,
+        message_id=message_id,
+    )
+
+
 async def smart_agent_chat_worker_loop() -> None:
     while True:
         try:
@@ -5106,6 +5176,8 @@ async def confirm_smart_agent_prompt_draft(
     user: UserSession = Depends(get_current_user),
     s: Settings = Depends(get_settings),
 ):
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        raise HTTPException(status_code=409, detail="Smart Agent V2 会在聊天回合内直接提交任务。")
     if not s.smart_agent_enabled:
         raise HTTPException(status_code=403, detail="Smart Agent 暂未开放")
     legacy_id = get_legacy_user_id_for_session(user, s)
@@ -5209,20 +5281,52 @@ async def resolve_character_disambiguation_endpoint(
         resolved_names = [c.get("name_zh", c.get("name_en", "")) for c in all_selected]
         char_display = "、".join(resolved_names) if resolved_names else char_name
 
-        # 合并原始请求和约束,排队到 worker
-        original_request = str(pending.get("original_request") or "")
-        combined_request = f"{char_display},{original_request}"
+        # Preserve the exact server-validated character IDs for the queued message.
+        # The worker must not re-run ambiguous name matching after a button click.
+        original_request = str(pending.get("original_request") or "").strip()
+        constraints = pending.get("constraints") or {}
+        supplements = constraints.get("supplements") if isinstance(constraints, dict) else []
+        if not isinstance(supplements, list):
+            supplements = []
+        queued_request = "\n".join(
+            item for item in (original_request, *[str(x).strip() for x in supplements]) if item
+        ) or original_request or char_display
+        selected_character_ids = [
+            str(c.get("identity_key") or c.get("character_key") or "").strip()
+            for c in all_selected
+        ]
+        selected_character_ids = [item for item in selected_character_ids if item]
 
-        # 清除 pending
         clear_pending_disambiguation(s, conversation_id=conv_id)
 
-        # 添加合并后的消息到队列
+        turn_request_id = (
+            request.headers.get("X-Client-Request-Id")
+            or f"smart-disambiguation:{conv_id}:{matched_group_id}:{character_key}"
+        )[:100]
         message_id = add_conversation_message(
-            s, conversation_id=conv_id, role="user",
-            content=combined_request, safe_content=combined_request,
-            status="pending", intent="generate",
+            s,
+            conversation_id=conv_id,
+            role="user",
+            content=queued_request,
+            safe_content=sanitize_public_agent_message(queued_request),
+            status="pending",
+            intent="generate",
+            client_request_id=turn_request_id,
         )
-        _add_safe_smart_agent_event(s, conversation_id=conv_id, event_type="message_pending", public_message="消息已发送,等待处理。")
+        if selected_character_ids:
+            save_message_resolution(
+                s,
+                conversation_id=conv_id,
+                message_id=message_id,
+                character_ids=selected_character_ids,
+                source="disambiguation_button",
+            )
+        _add_safe_smart_agent_event(
+            s,
+            conversation_id=conv_id,
+            event_type="message_pending",
+            public_message="人物已确认，正在继续处理。",
+        )
 
         return {
             "ok": True,
@@ -5243,8 +5347,7 @@ async def resolve_character_disambiguation_endpoint(
         }
 
 
-@app.post("/api/smart-agent/conversations/{conversation_code}/messages")
-async def send_smart_agent_message(
+async def _send_smart_agent_message_legacy(
     conversation_code: str,
     payload: SmartAgentMessageRequest,
     request: Request,
@@ -5515,6 +5618,199 @@ async def send_smart_agent_message(
     }
 
 
+
+@app.post("/api/smart-agent/conversations/{conversation_code}/messages")
+async def send_smart_agent_message(
+    conversation_code: str,
+    payload: SmartAgentMessageRequest,
+    request: Request,
+    csrf: None = Depends(require_csrf),
+    user: UserSession = Depends(get_current_user),
+    s: Settings = Depends(get_settings),
+):
+    """V2 message entry with one active user turn per conversation."""
+    if not bool(getattr(s, "smart_agent_v2_enabled", False)):
+        return await _send_smart_agent_message_legacy(
+            conversation_code=conversation_code,
+            payload=payload,
+            request=request,
+            csrf=csrf,
+            user=user,
+            s=s,
+        )
+    if not s.smart_agent_enabled:
+        raise HTTPException(status_code=403, detail="Smart Agent 暂未开放")
+
+    legacy_id = get_legacy_user_id_for_session(user, s)
+    conv = get_conversation(s, conversation_code=conversation_code, legacy_user_id=legacy_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    user_msg = str(payload.message or "").strip()
+    if not user_msg:
+        raise HTTPException(status_code=400, detail="请输入消息")
+    client_request_id = (request.headers.get("X-Client-Request-Id") or uuid.uuid4().hex)[:100]
+
+    existing = _find_message_by_client_request_id(
+        s,
+        conversation_id=int(conv["id"]),
+        client_request_id=client_request_id,
+    )
+    if existing:
+        status = str(existing.get("status") or "")
+        return {
+            "ok": True,
+            "conversation_code": conversation_code,
+            "message_id": int(existing["id"]),
+            "resolved_intent": str(existing.get("intent") or "chat"),
+            "processing": status in {"pending", "processing"},
+            "duplicate": True,
+        }
+
+    resolved_intent = _resolve_smart_agent_intent(user_msg)
+    turn = prepare_turn(
+        user_msg,
+        resolved_intent=resolved_intent,
+        client_request_id=client_request_id,
+    )
+
+    if has_active_turn(s, conversation_id=int(conv["id"])):
+        raise HTTPException(status_code=409, detail="智能 Agent 正在处理上一条消息，请稍后。")
+
+    # Internal prompts are never returned in V2, even when a legacy draft exists.
+    if turn.prompt_exposure_requested:
+        safe_user_msg = sanitize_public_agent_message(user_msg)
+        message_id = add_conversation_message(
+            s,
+            conversation_id=int(conv["id"]),
+            role="user",
+            content=user_msg,
+            safe_content=safe_user_msg,
+            status="done",
+            intent="chat",
+            client_request_id=client_request_id,
+        )
+        reply = safe_prompt_hidden_reply()
+        add_conversation_message(
+            s,
+            conversation_id=int(conv["id"]),
+            role="assistant",
+            content=reply,
+            safe_content=reply,
+        )
+        _add_safe_smart_agent_event(
+            s,
+            conversation_id=int(conv["id"]),
+            event_type="assistant_message",
+            public_message=reply,
+        )
+        _add_safe_smart_agent_event(
+            s,
+            conversation_id=int(conv["id"]),
+            event_type="done",
+            public_message="",
+        )
+        return {
+            "ok": True,
+            "conversation_code": conversation_code,
+            "message_id": message_id,
+            "resolved_intent": "chat",
+            "processing": False,
+        }
+
+    draft = get_smart_agent_prompt_draft(s, conversation_id=int(conv["id"]))
+    draft_ready = bool(draft and str(draft.get("status") or "") == "prompt_ready")
+
+    # A bare "generate" uses the already prepared private draft immediately.
+    if turn.generation_requested and turn.meta_only and draft_ready:
+        _rate_limit_smart_agent(request, user, s, action="generate")
+        message_id = add_conversation_message(
+            s,
+            conversation_id=int(conv["id"]),
+            role="user",
+            content=user_msg,
+            safe_content=sanitize_public_agent_message(user_msg),
+            status="done",
+            intent="generate",
+            client_request_id=client_request_id,
+        )
+        result = await _confirm_smart_agent_prompt_generation(
+            s=s,
+            conversation=conv,
+            conversation_code=conversation_code,
+            legacy_id=legacy_id,
+            username=user.username,
+            user_public_id=user.user_id,
+            client_request_id=f"smart-v2-confirm:{conversation_code}:{int(draft.get('prompt_version') or 1)}",
+            request=request,
+            user=user,
+        )
+        result.update({
+            "message_id": message_id,
+            "resolved_intent": "generate",
+            "processing": False,
+        })
+        return result
+
+    if not s.deepseek_api_key:
+        raise HTTPException(status_code=503, detail="Smart Agent 暂未配置，请稍后再试")
+
+    _rate_limit_smart_agent(
+        request,
+        user,
+        s,
+        action="generate" if turn.generation_requested else "chat",
+    )
+    accepted = begin_turn_atomic(
+        s,
+        conversation_id=int(conv["id"]),
+        client_request_id=client_request_id,
+        generation_requested=turn.generation_requested,
+        turn_id=turn.turn_key,
+    )
+    if accepted.get("duplicate"):
+        return {
+            "ok": True,
+            "conversation_code": conversation_code,
+            "message_id": accepted.get("message_id"),
+            "resolved_intent": resolved_intent,
+            "processing": str(accepted.get("status") or "") in {"accepted", "processing"},
+            "duplicate": True,
+        }
+
+    try:
+        message_id = add_conversation_message(
+            s,
+            conversation_id=int(conv["id"]),
+            role="user",
+            content=user_msg,
+            safe_content=sanitize_public_agent_message(user_msg),
+            status="pending",
+            intent=resolved_intent,
+            client_request_id=client_request_id,
+        )
+        bind_turn_message(s, turn_id=str(accepted["turn_id"]), message_id=message_id)
+    except Exception as exc:
+        abort_turn(s, turn_id=str(accepted["turn_id"]), error=type(exc).__name__)
+        raise
+
+    _add_safe_smart_agent_event(
+        s,
+        conversation_id=int(conv["id"]),
+        event_type="message_pending",
+        public_message="消息已发送，等待处理。",
+    )
+    return {
+        "ok": True,
+        "conversation_code": conversation_code,
+        "message_id": message_id,
+        "resolved_intent": resolved_intent,
+        "should_create_task": turn.generation_requested,
+        "processing": True,
+        "turn_id": str(accepted["turn_id"]),
+    }
+
+
 @app.get("/api/smart-agent/conversations/{conversation_code}/events")
 def get_smart_agent_events(
     conversation_code: str,
@@ -5527,6 +5823,21 @@ def get_smart_agent_events(
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
     events = get_conversation_events(s, conversation_id=conv["id"], after_id=after_id)
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        for event in events:
+            if str(event.get("event_type") or "") != "prompt_ready":
+                continue
+            prompt_version = 1
+            try:
+                old_payload = json.loads(str(event.get("public_message") or "{}"))
+                prompt_version = int(old_payload.get("prompt_version") or 1)
+            except Exception:
+                pass
+            event["public_message"] = json.dumps(
+                {"message": "方案已准备完成。", "prompt_version": prompt_version},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
     return {
         "ok": True,
         "events": [
@@ -5556,6 +5867,8 @@ def clear_conversation_memory(
     conv = get_conversation(s, conversation_code=conversation_code, legacy_user_id=legacy_id)
     if not conv:
         raise HTTPException(status_code=404, detail="会话不存在")
+    if bool(getattr(s, "smart_agent_v2_enabled", False)):
+        clear_v2_state(s, conversation_id=int(conv["id"]))
     clear_conversation(s, conversation_id=conv["id"])
     return {"ok": True}
 

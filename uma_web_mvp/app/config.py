@@ -118,6 +118,7 @@ class Settings(BaseSettings):
     agent_keep_alive: str = "0"
 
     smart_agent_enabled: bool = False
+    smart_agent_v2_enabled: bool = False
     smart_agent_cost_credits: int = 10
     smart_agent_rate_window_seconds: int = 600
     smart_agent_chat_user_limit: int = 30
