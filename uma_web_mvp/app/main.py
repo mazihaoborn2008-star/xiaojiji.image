@@ -408,6 +408,8 @@ async def security_headers(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     if request.url.path.startswith(("/api/image-refunds", "/api/admin/image-refunds")):
         response.headers["Cache-Control"] = "no-store"
+    if request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
 
 
