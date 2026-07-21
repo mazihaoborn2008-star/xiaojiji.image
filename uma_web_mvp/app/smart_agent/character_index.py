@@ -541,26 +541,27 @@ def _match_cjk_substrings(
     raw_text: str,
     haystack_zh: str,
     groups: list[dict[str, Any]],
-    occupied_spans: list[tuple[int, str]],
+    occupied_spans: list[tuple[int, int, str]],
 ) -> None:
-    """CJK 短名包含匹配：从输入中提取 CJK 片段（非滑动窗口），用索引查询。"""
+    """CJK 短名包含匹配：直接扫描已建立的歧义短名索引。"""
     if not haystack_zh or len(haystack_zh) < 2:
         return
 
-    # 提取所有 CJK 连续片段（run）
+    # Keep complete runs for the exact-name fallback below, then add every
+    # known ambiguous short mention that actually occurs in the normalized
+    # request.  The old sliding-window path only ran for CJK runs of six or
+    # more characters, so a prompt such as "麻美穿风衣" (five characters)
+    # silently missed the "麻美" ambiguity.
     cjk_runs = re.findall(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]{2,}", raw_text)
     cjk_parts: set[str] = set()
     for run in cjk_runs:
         norm = _normalize_zh_key(run)
         if len(norm) >= 2:
             cjk_parts.add(norm)
-            # Extract 2-4 char sliding windows from long CJK runs
-            if len(norm) >= 6:
-                for ws in (2, 3, 4):
-                    for i in range(len(norm) - ws + 1):
-                        sub = norm[i:i + ws]
-                        if len(sub) >= 2:
-                            cjk_parts.add(sub)
+
+    for mention in _ZH_SUBSTRING_INDEX:
+        if mention and mention in haystack_zh:
+            cjk_parts.add(mention)
 
     # 检查每个 CJK 片段是否对应到子串索引中的 ment
     for cjk_part in sorted(cjk_parts, key=len, reverse=True):
