@@ -56,3 +56,53 @@ def test_external_character_rejects_generic(monkeypatch):
 
     monkeypatch.setattr(client, "complete_json", fake_complete)
     assert asyncio.run(client.infer_external_character(object(), "一个女孩在公园")) is None
+
+
+def test_external_character_accepts_explicit_cjk_name(monkeypatch):
+    import asyncio
+    import app.smart_agent.v2_client as client
+
+    async def fake_complete(*args, **kwargs):
+        return {
+            "found": True,
+            "original_name": "朝雾茉莉",
+            "identity_tag": "asagiri_matsuri",
+        }
+
+    monkeypatch.setattr(client, "complete_json", fake_complete)
+    result = asyncio.run(
+        client.infer_external_character(object(), "画《朝雾茉莉》在海边看日落")
+    )
+    assert result == {
+        "original_name": "朝雾茉莉",
+        "identity_tag": "asagiri_matsuri",
+    }
+
+
+def test_external_character_rejects_hallucinated_name(monkeypatch):
+    import asyncio
+    import app.smart_agent.v2_client as client
+
+    async def fake_complete(*args, **kwargs):
+        return {
+            "found": True,
+            "original_name": "朝雾茉莉",
+            "identity_tag": "asagiri_matsuri",
+        }
+
+    monkeypatch.setattr(client, "complete_json", fake_complete)
+    assert (
+        asyncio.run(client.infer_external_character(object(), "女孩在海边看日落"))
+        is None
+    )
+
+
+def test_external_character_rejects_control_word(monkeypatch):
+    import asyncio
+    import app.smart_agent.v2_client as client
+
+    async def fake_complete(*args, **kwargs):
+        return {"found": True, "original_name": "重新", "identity_tag": "chongxin"}
+
+    monkeypatch.setattr(client, "complete_json", fake_complete)
+    assert asyncio.run(client.infer_external_character(object(), "重新生成一张")) is None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from app.config import Settings
@@ -113,7 +114,14 @@ _GENERIC_EXTERNAL_TAGS = {
     "girl", "boy", "woman", "man", "character", "anime_girl", "anime_boy",
     "schoolgirl", "student", "maid", "nurse", "teacher", "original_character",
     "park", "beach", "classroom", "bedroom", "city", "school", "umamusume",
+    "summary", "confirm", "confirmation", "continue", "generate", "regenerate",
+    "retry", "restart", "chongxin", "queren",
 }
+
+
+def _identity_evidence_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(ch for ch in normalized if ch.isalnum() or ch in "_-'()")
 
 
 async def infer_external_character(settings: Settings, user_message: str) -> dict[str, str] | None:
@@ -146,6 +154,13 @@ async def infer_external_character(settings: Settings, user_message: str) -> dic
     if tag in _GENERIC_EXTERNAL_TAGS:
         return None
     if tag.count("(") != tag.count(")"):
+        return None
+    # The model must point to a name the user actually wrote.  This prevents a
+    # scene-only request from acquiring a hallucinated external identity even
+    # if the classifier incorrectly returns found=true.
+    original_key = _identity_evidence_key(original)
+    message_key = _identity_evidence_key(user_message)
+    if len(original_key) < 2 or original_key not in message_key:
         return None
     return {"original_name": original, "identity_tag": tag}
 

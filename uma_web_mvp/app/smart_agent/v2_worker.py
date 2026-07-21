@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 import time
 from typing import Any
 
@@ -38,26 +37,6 @@ from .v2_store import (
     get_message_resolution,
     mark_turn_processing,
 )
-
-
-_VISUAL_WORDS = {
-    "场景", "背景", "服装", "衣服", "动作", "表情", "构图", "镜头", "光线", "氛围",
-    "公园", "教室", "卧室", "海边", "沙滩", "城市", "街道", "夜晚", "白天", "黄昏",
-    "生成", "生图", "出图", "图片", "画面", "帮我", "给我", "一个", "一张",
-}
-
-
-def _probable_character_name(value: str) -> bool:
-    clean = str(value or "").strip(" ，,。.!！?？")
-    if not clean or len(clean) > 32:
-        return False
-    if any(word in clean for word in _VISUAL_WORDS):
-        return False
-    # A name needs at least two CJK chars, or a normal booru/foreign token.
-    cjk_count = sum(1 for ch in clean if "\u3400" <= ch <= "\u9fff")
-    if cjk_count >= 2:
-        return True
-    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_ ()'\-]{2,80}", clean))
 
 
 def _selected_json_from_draft(runtime: Any, draft: dict[str, Any] | None) -> str:
@@ -346,31 +325,11 @@ async def process_smart_agent_turn_v2(
                     character_tag_source = "explicit_user_character"
 
             if not new_characters:
-                candidate = runtime.extract_possible_character_names(turn.visual_text)
-                if candidate and _probable_character_name(candidate):
-                    original_character_name = candidate
-                    translated = await runtime.translate_character_name(candidate)
-                    translated_character_name = (
-                        str(translated or "").strip() if translated != candidate else ""
-                    )
-                    effective_name = translated_character_name or original_character_name
-                    fallback = runtime.build_agent_fallback_character(
-                        effective_name, original_character_name
-                    )
-                    if fallback:
-                        # A library miss remains a user-explicit character.  It is
-                        # never re-matched to a different library character after
-                        # translation.
-                        fallback["character_tag_source"] = "explicit_user_character"
-                        fallback["source"] = "explicit_user_character"
-                        fallback["explicit_tags"] = [
-                            effective_name.strip().lower().replace(" ", "_")
-                        ]
-                        fallback["canonical_tags"] = list(fallback["explicit_tags"])
-                        new_characters = [fallback]
-                        character_tag_source = "explicit_user_character"
-
-            if not new_characters:
+                # Do not feed a longest-CJK-run guess into character translation.
+                # Scene, action and control text used to become fake identities
+                # (and later pollute character_key).  The external-character
+                # classifier is the only fallback allowed after deterministic
+                # library and explicit-tag matching fail.
                 inferred = await infer_external_character(s, turn.visual_text)
                 if inferred:
                     original_character_name = str(inferred["original_name"])
