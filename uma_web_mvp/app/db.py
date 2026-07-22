@@ -920,19 +920,33 @@ def _compute_request_fingerprint(
     request_text: str,
     cost_credits: int,
     client_request_id: str | None = None,
+    prompt_source: str = "",
+    character_keys: list[str] | None = None,
+    workflow_key: str = "",
+    width: int = 0,
+    height: int = 0,
+    translation_mode: str = "",
 ) -> str:
     """Compute stable fingerprint for idempotency check.
 
-    Includes only business fields that affect task behavior.
+    Includes all business fields that affect task behavior.
     Excludes timestamps, random IDs, and transient state.
+    client_request_id is excluded (it's the idempotency key itself).
     """
     import hashlib
+    # Normalize character keys: sort for stable comparison
+    normalized_chars = sorted(character_keys) if character_keys else []
     payload = json.dumps(
         {
             "user_id": user_id,
             "request_text": request_text.strip(),
             "cost_credits": cost_credits,
-            "client_request_id": str(client_request_id or "").strip(),
+            "prompt_source": prompt_source.strip(),
+            "character_keys": normalized_chars,
+            "workflow_key": workflow_key.strip(),
+            "width": width,
+            "height": height,
+            "translation_mode": translation_mode.strip(),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1018,14 +1032,19 @@ def _insert_refund_event(
     reason: str,
     now: int,
 ) -> bool:
-    """Insert refund billing event. Returns True if inserted, False if duplicate."""
-    event_key = f"smart-agent-refund:{task_id}:{reason}"
+    """Insert refund billing event. Returns True if inserted, False if duplicate.
+
+    Event key uses only task_id to prevent cross-reason duplicate refunds.
+    Reason is stored as metadata, not part of the unique key.
+    """
+    event_key = f"smart-agent-refund:{task_id}"
+    metadata = json.dumps({"reason": reason}, ensure_ascii=False)
     try:
         conn.execute(
             "INSERT INTO smart_agent_billing_events "
-            "(user_id, task_id, event_type, amount, event_key, created_at) "
-            "VALUES (?, ?, 'refund', ?, ?, ?)",
-            (user_id, task_id, amount, event_key, now),
+            "(user_id, task_id, event_type, amount, event_key, created_at, metadata) "
+            "VALUES (?, ?, 'refund', ?, ?, ?, ?)",
+            (user_id, task_id, amount, event_key, now, metadata),
         )
         return True
     except sqlite3.IntegrityError:
@@ -1218,23 +1237,62 @@ def create_smart_agent_queued_task_atomic(
     try:
         conn.execute("BEGIN IMMEDIATE")
         request_id = str(client_request_id or "").strip()[:80] or None
+
+        # ── Idempotency check via dedicated table ──
         if request_id:
-            existing = conn.execute(
-                """
-                SELECT job_code, charged_fen, status
-                FROM generation_tasks
-                WHERE user_id=? AND client_request_id=?
-                """,
-                (user_id, request_id),
-            ).fetchone()
-            if existing:
+            fingerprint = _compute_request_fingerprint(
+                user_id=user_id,
+                request_text=request_text,
+                cost_credits=cost_credits,
+                prompt_source=prompt_source,
+                character_keys=[character_key] if character_key else [],
+                workflow_key=workflow_key,
+                width=width,
+                height=height,
+            )
+            idem_result = _check_idempotency(
+                conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+            )
+            if idem_result:
+                if idem_result.get("task_id"):
+                    existing_task = conn.execute(
+                        "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                        (idem_result["task_id"],),
+                    ).fetchone()
+                    conn.commit()
+                    return {
+                        "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                        "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                        "status": existing_task["status"] if existing_task else "queued",
+                        "deduped": True,
+                    }
                 conn.commit()
-                return {
-                    "job_code": existing["job_code"],
-                    "charged_fen": int(existing["charged_fen"]),
-                    "status": existing["status"],
-                    "deduped": True,
-                }
+                return {"job_code": job_code, "charged_fen": charged_fen, "status": "queued", "deduped": True}
+            try:
+                _insert_idempotency_record(
+                    conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint, now=now,
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                conn = connect(settings)
+                conn.execute("BEGIN IMMEDIATE")
+                idem_result = _check_idempotency(
+                    conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+                )
+                if idem_result and idem_result.get("task_id"):
+                    existing_task = conn.execute(
+                        "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                        (idem_result["task_id"],),
+                    ).fetchone()
+                    conn.commit()
+                    return {
+                        "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                        "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                        "status": existing_task["status"] if existing_task else "queued",
+                        "deduped": True,
+                    }
+                conn.commit()
+                return {"job_code": job_code, "charged_fen": charged_fen, "status": "queued", "deduped": True}
         global_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
         ).fetchone()[0])
@@ -1278,6 +1336,10 @@ def create_smart_agent_queued_task_atomic(
                 str(workflow_source or "")[:80], str(fallback_level or "")[:80],
             ),
         )
+        if request_id:
+            _complete_idempotency_record(
+                conn, user_id=user_id, request_id=request_id, task_id=job_code, now=now,
+            )
         conn.commit()
         return {"job_code": job_code, "charged_fen": charged_fen, "status": "queued", "deduped": False}
     except Exception:
@@ -1340,6 +1402,84 @@ def confirm_smart_agent_prompt_draft_atomic(
         else:
             # 追加 prompt_version 确保每次确认的幂等键唯一
             request_id = f"{request_id}:v{int(draft['prompt_version'] or 1)}"
+
+        # ── Idempotency check via dedicated table ──
+        fingerprint = _compute_request_fingerprint(
+            user_id=user_id,
+            request_text=str(draft.get("request_text") or ""),
+            cost_credits=cost_credits,
+            prompt_source=str(draft.get("prompt_source") or ""),
+            character_keys=[str(draft.get("resolved_character_key") or "")] if draft.get("resolved_character_key") else [],
+            workflow_key=str(draft.get("workflow_key") or ""),
+            width=int(draft.get("width") or 1024),
+            height=int(draft.get("height") or 1024),
+        )
+        idem_result = _check_idempotency(
+            conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+        )
+        if idem_result:
+            if idem_result.get("task_id"):
+                existing_task = conn.execute(
+                    "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                    (idem_result["task_id"],),
+                ).fetchone()
+                conn.execute(
+                    "UPDATE smart_agent_prompt_drafts SET status='generated', generation_job_code=?, updated_at=? WHERE id=?",
+                    (idem_result["task_id"], now, draft["id"]),
+                )
+                conn.commit()
+                return {
+                    "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                    "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                    "status": str(existing_task["status"] if existing_task else "queued"),
+                    "already_created": True,
+                    "prompt_version": int(draft["prompt_version"] or 1),
+                }
+            conn.commit()
+            return {
+                "job_code": request_id,
+                "charged_fen": charged_fen,
+                "status": "queued",
+                "already_created": True,
+                "prompt_version": int(draft["prompt_version"] or 1),
+            }
+        try:
+            _insert_idempotency_record(
+                conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint, now=now,
+            )
+        except Exception:
+            conn.rollback()
+            conn = connect(settings)
+            conn.execute("BEGIN IMMEDIATE")
+            idem_result = _check_idempotency(
+                conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+            )
+            if idem_result and idem_result.get("task_id"):
+                existing_task = conn.execute(
+                    "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                    (idem_result["task_id"],),
+                ).fetchone()
+                conn.execute(
+                    "UPDATE smart_agent_prompt_drafts SET status='generated', generation_job_code=?, updated_at=? WHERE id=?",
+                    (idem_result["task_id"], now, draft["id"]),
+                )
+                conn.commit()
+                return {
+                    "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                    "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                    "status": str(existing_task["status"] if existing_task else "queued"),
+                    "already_created": True,
+                    "prompt_version": int(draft["prompt_version"] or 1),
+                }
+            conn.commit()
+            return {
+                "job_code": request_id,
+                "charged_fen": charged_fen,
+                "status": "queued",
+                "already_created": True,
+                "prompt_version": int(draft["prompt_version"] or 1),
+            }
+
         existing = conn.execute(
             "SELECT job_code, charged_fen, status FROM generation_tasks WHERE user_id=? AND client_request_id=?",
             (user_id, request_id),
@@ -1348,6 +1488,9 @@ def confirm_smart_agent_prompt_draft_atomic(
             conn.execute(
                 "UPDATE smart_agent_prompt_drafts SET status='generated', generation_job_code=?, updated_at=? WHERE id=?",
                 (existing["job_code"], now, draft["id"]),
+            )
+            _complete_idempotency_record(
+                conn, user_id=user_id, request_id=request_id, task_id=existing["job_code"], now=now,
             )
             conn.commit()
             return {
@@ -1410,6 +1553,9 @@ def confirm_smart_agent_prompt_draft_atomic(
         conn.execute(
             "UPDATE smart_agent_prompt_drafts SET status='generated', generation_job_code=?, updated_at=? WHERE id=?",
             (job_code, now, draft["id"]),
+        )
+        _complete_idempotency_record(
+            conn, user_id=user_id, request_id=request_id, task_id=job_code, now=now,
         )
         conn.commit()
         return {

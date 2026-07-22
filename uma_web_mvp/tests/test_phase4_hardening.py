@@ -321,7 +321,7 @@ class TestCrossReasonRefundProtection:
         assert _get_balance(settings, TEST_USER) == 50000
 
     def test_billing_event_key_includes_task_id(self):
-        """Refund event key must include task_id to prevent cross-task reuse."""
+        """Refund event key must include task_id and reject different-reason duplicates."""
         case_root = _case_root()
         settings = _make_settings(case_root)
 
@@ -336,25 +336,18 @@ class TestCrossReasonRefundProtection:
             assert r1 is True
 
             # Try to insert refund for same task-A with different reason
-            # The event key includes reason, so this would be a different key
-            # But we want to verify the design
+            # With key = task_id (no reason), this MUST fail (duplicate)
             r2 = _insert_refund_event(
                 conn, user_id=TEST_USER, task_id="task-A",
                 amount=5, reason="different_reason", now=1001,
             )
             conn.commit()
-            # With current design (key = task_id:reason), this succeeds
-            # because different reason = different key
-            # This is acceptable IF the status check prevents the actual refund
-            assert r2 is True  # Different key, insert succeeds
-
-            # But the actual refund function checks status first,
-            # so the second refund would fail at the status check
+            assert r2 is False  # Same task_id in key, duplicate rejected
         finally:
             conn.close()
 
     def test_refund_event_key_format(self):
-        """Verify the event key format includes task_id and reason."""
+        """Verify the event key format includes task_id only (not reason)."""
         case_root = _case_root()
         settings = _make_settings(case_root)
 
@@ -373,7 +366,8 @@ class TestCrossReasonRefundProtection:
             assert len(rows) == 1
             key = rows[0]["event_key"]
             assert "JOB-123" in key
-            assert "smart_agent_refund" in key
+            # Reason should NOT be in the key (prevents cross-reason duplicates)
+            assert "smart_agent_refund" not in key
         finally:
             conn.close()
 
