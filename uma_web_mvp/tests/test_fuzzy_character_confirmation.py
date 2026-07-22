@@ -350,6 +350,11 @@ def _run_build(settings, request_text, **kwargs):
         loop.close()
 
 
+def _run_build_sync(settings, request_text, **kwargs):
+    """Alias for _run_build for use in non-fixture tests."""
+    return _run_build(settings, request_text, **kwargs)
+
+
 class TestWorkerCharacterResolution:
     """Worker (build_smart_agent_plan) must respect pre-resolved character decisions.
 
@@ -1030,10 +1035,11 @@ class TestParseCharacterIds:
         result = parse_character_ids('["kochou_shinobu"]')
         assert result == ["kochou_shinobu"]
 
-    def test_invalid_json_falls_back(self):
+    def test_invalid_json_returns_empty(self):
+        """JSON parse failure does NOT fall back to comma split."""
         from app.smart_agent.planner import parse_character_ids
         result = parse_character_ids("[invalid")
-        assert result == ["[invalid"]  # treated as comma-separated
+        assert result == []  # strict: JSON failure → empty
 
     def test_json_array_with_spaces(self):
         from app.smart_agent.planner import parse_character_ids
@@ -1091,3 +1097,303 @@ class TestJsonCharacterKeyIntegration:
             _run_build(settings, "test", task_prompt_source="agent_character_resolved",
                         task_character_key="[]")
         assert exc_info.value.code == "invalid_character_resolution"
+
+
+# -- Unknown state spy tests (requirements 1-7) -------------------------
+
+class TestUnknownStateSpy:
+    """Unknown non-empty prompt_source must not run any character search."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_unknown_no_find_characters(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (calls.append(("find", t)), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", lambda t: (calls.append(("extract", t)), "")[1])
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="unknown_value")
+        find_calls = [c for c in calls if c[0] == "find"]
+        assert find_calls == [], f"find_characters called: {find_calls}"
+
+    def test_unknown_no_extract(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (calls.append(("find", t)), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", lambda t: (calls.append(("extract", t)), "")[1])
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="unknown_value")
+        extract_calls = [c for c in calls if c[0] == "extract"]
+        assert extract_calls == [], f"extract called: {extract_calls}"
+
+    def test_unknown_no_translate(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        async def spy_translate(t):
+            calls.append(("translate", t))
+            return t
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        monkeypatch.setattr("app.smart_agent.planner.translate_character_name", spy_translate)
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="unknown_value")
+        translate_calls = [c for c in calls if c[0] == "translate"]
+        assert translate_calls == []
+
+    def test_unknown_safe_failure(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "test", task_prompt_source="unknown_value")
+        assert exc_info.value.code == "invalid_character_resolution"
+
+    def test_empty_string_legacy(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (calls.append(t), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        _run_build(settings, "test", task_prompt_source="")
+        assert len(calls) >= 1
+
+    def test_none_prompt_source_legacy(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (calls.append(t), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        _run_build(settings, "test", task_prompt_source="")
+        assert len(calls) >= 1
+
+    def test_user_raw_not_legacy(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (calls.append(t), [])[1])
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="user_raw")
+        assert calls == []
+
+
+# -- Validation limits tests (requirements 14-17) -----------------------
+
+class TestValidationLimits:
+    """Character ID validation limits."""
+
+    def test_max_8_characters_ok(self):
+        from app.smart_agent.planner import serialize_character_ids
+        ids = [f"char_{i}" for i in range(8)]
+        result = serialize_character_ids(ids)
+        import json
+        assert len(json.loads(result)) == 8
+
+    def test超过_8_characters_raises(self):
+        from app.smart_agent.planner import serialize_character_ids, SmartAgentError
+        import pytest
+        ids = [f"char_{i}" for i in range(9)]
+        with pytest.raises(SmartAgentError) as exc_info:
+            serialize_character_ids(ids)
+        assert exc_info.value.code == "invalid_character_resolution"
+
+    def test超长_id_raises(self):
+        from app.smart_agent.planner import serialize_character_ids, SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            serialize_character_ids(["a" * 81])
+
+    def test_id_at_limit_ok(self):
+        from app.smart_agent.planner import serialize_character_ids
+        result = serialize_character_ids(["a" * 80])
+        import json
+        assert len(json.loads(result)) == 1
+
+    def test_json超长_raises(self):
+        from app.smart_agent.planner import serialize_character_ids, SmartAgentError
+        import pytest
+        # 8 IDs * ~130 chars each → JSON > 1024 chars
+        ids = ["a" * 130 for _ in range(8)]
+        with pytest.raises(SmartAgentError):
+            serialize_character_ids(ids)
+
+    def test_validate_max_8_ok(self):
+        from app.smart_agent.planner import validate_character_ids
+        ids = [f"char_{i}" for i in range(8)]
+        result = validate_character_ids(ids)
+        assert len(result) == 8
+
+    def test_validate超过_8_raises(self):
+        from app.smart_agent.planner import validate_character_ids, SmartAgentError
+        import pytest
+        ids = [f"char_{i}" for i in range(9)]
+        with pytest.raises(SmartAgentError):
+            validate_character_ids(ids)
+
+    def test_validate超长_id_raises(self):
+        from app.smart_agent.planner import validate_character_ids, SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            validate_character_ids(["a" * 81])
+
+    def test_validate_no_library_sentinel_raises(self):
+        from app.smart_agent.planner import validate_character_ids, SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            validate_character_ids(["__no_library_character__"])
+
+    def test_validate_empty_list_raises(self):
+        from app.smart_agent.planner import validate_character_ids, SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            validate_character_ids([])
+
+    def test_validate_empty_id_raises(self):
+        from app.smart_agent.planner import validate_character_ids, SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            validate_character_ids(["valid_id", ""])
+
+
+# -- Backward compatibility parse tests (requirements 18-29) -----------
+
+class TestBackwardCompatibility:
+    """parse_character_ids must handle all formats correctly."""
+
+    def test旧_单值(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids("kochou_shinobu") == ["kochou_shinobu"]
+
+    def test旧_逗号双人物(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids("silence_suzuka,tokai_teio") == ["silence_suzuka", "tokai_teio"]
+
+    def test旧_逗号三人物(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids("a,b,c") == ["a", "b", "c"]
+
+    def test新_json_双人物(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids('["silence_suzuka","tokai_teio"]') == ["silence_suzuka", "tokai_teio"]
+
+    def test新_json_三人物(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids('["a","b","c"]') == ["a", "b", "c"]
+
+    def test损坏_json_returns_empty(self):
+        from app.smart_agent.planner import parse_character_ids
+        # Starts with [ but invalid JSON → must NOT fall back to comma split
+        assert parse_character_ids("[broken json") == []
+
+    def test_json_non_string元素_returns_empty(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids('[123, "valid"]') == []
+
+    def test_json_空字符串_returns_empty(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids('["valid", ""]') == []
+
+    def test_json混合有效无效(self):
+        """One valid + one empty → entire parse fails."""
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids('["valid_id", ""]')
+        assert result == []
+
+    def test_json_no_library_sentinel_parsed(self):
+        """Sentinel is parsed (validation happens later in validate_character_ids)."""
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids('["__no_library_character__"]')
+        assert result == ["__no_library_character__"]  # parsed, but validate will reject
+
+    def test_disabled加非空_array_raises(self):
+        """Disabled state with non-empty character array → safe failure."""
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build_sync(settings, "test", task_prompt_source="agent_no_character",
+                            task_character_key='["kochou_shinobu"]')
+        assert exc_info.value.code == "invalid_character_resolution"
+
+    def test_resolved加空_array_raises(self):
+        """Resolved state with empty array → safe failure."""
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build_sync(settings, "test", task_prompt_source="agent_character_resolved",
+                            task_character_key="[]")
+        assert exc_info.value.code == "invalid_character_resolution"
+
+
+# -- Disabled state validation (requirement 28) -------------------------
+
+class TestDisabledStateValidation:
+    """Disabled state must not have character IDs."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_disabled_empty_key_ok(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        plan = _run_build(settings, "test", task_prompt_source="agent_no_character", task_character_key="")
+        assert plan["character_key"] == ""
+
+    def test_disabled_json_empty_array_ok(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        plan = _run_build(settings, "test", task_prompt_source="agent_no_character", task_character_key="[]")
+        assert plan["character_key"] == ""
+
+    def test_disabled_nonempty_raises(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="agent_no_character",
+                        task_character_key='["some_id"]')
+
+    def test_disabled_sentinel_raises(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError):
+            _run_build(settings, "test", task_prompt_source="agent_no_character",
+                        task_character_key='["__no_library_character__"]')

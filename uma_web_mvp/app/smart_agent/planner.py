@@ -37,6 +37,11 @@ class SmartAgentClarification(SmartAgentError):
 
 # ── Character decision classification ───────────────────────────────
 
+# Validation limits for character IDs.
+MAX_CHARACTERS_PER_TASK = 8
+MAX_CHARACTER_ID_LENGTH = 80
+MAX_CHARACTER_IDS_JSON_LENGTH = 1024
+
 # All known task-level prompt_source values that carry a character decision.
 _RESOLVED_SOURCES = {"agent_character_resolved"}
 _DISABLED_SOURCES = {"agent_character_no_library", "agent_no_character"}
@@ -68,15 +73,34 @@ def serialize_character_ids(character_ids: list[str]) -> str:
     """Serialize a list of character IDs to a compact JSON array string.
 
     Deduplicates while preserving order.  Returns "[]" for empty input.
+    Validates: max 8 IDs, each max 80 chars, total max 1024 chars.
     """
     seen: set[str] = set()
     result: list[str] = []
     for cid in character_ids:
         cid = str(cid or "").strip()
-        if cid and cid not in seen:
+        if not cid:
+            continue
+        if len(cid) > MAX_CHARACTER_ID_LENGTH:
+            raise SmartAgentError(
+                "人物 ID 过长，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        if cid not in seen:
             seen.add(cid)
             result.append(cid)
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    if len(result) > MAX_CHARACTERS_PER_TASK:
+        raise SmartAgentError(
+            f"人物数量不能超过 {MAX_CHARACTERS_PER_TASK} 个。",
+            code="invalid_character_resolution",
+        )
+    serialized = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized) > MAX_CHARACTER_IDS_JSON_LENGTH:
+        raise SmartAgentError(
+            "人物数据过长，请减少人物数量或缩短 ID。",
+            code="invalid_character_resolution",
+        )
+    return serialized
 
 
 def parse_character_ids(raw: str) -> list[str]:
@@ -86,21 +110,81 @@ def parse_character_ids(raw: str) -> list[str]:
     - New JSON array: ["id1","id2"]
     - Legacy comma-separated: "id1,id2"
 
-    Returns [] for empty/invalid input.
+    Rules:
+    - String starting with [ must parse as strict JSON.
+    - JSON parse failure does NOT fall back to comma split.
+    - Legacy non-JSON strings are split by comma.
+    - Returns [] for empty/invalid input.
     """
     raw = str(raw or "").strip()
     if not raw:
         return []
-    # Try JSON array first
     if raw.startswith("["):
         try:
             parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return [str(item).strip() for item in parsed if str(item).strip()]
         except (json.JSONDecodeError, TypeError):
-            pass
-    # Fall back to comma-separated (legacy format)
+            # JSON parse failure → return empty (do NOT fall back to comma split)
+            return []
+        if not isinstance(parsed, list):
+            return []
+        result: list[str] = []
+        for item in parsed:
+            if not isinstance(item, str):
+                return []  # non-string element → invalid
+            s = item.strip()
+            if not s:
+                return []  # empty string element → invalid
+            result.append(s)
+        return result
+    # Legacy comma-separated format
     return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def validate_character_ids(char_ids: list[str], *, source: str = "") -> list[str]:
+    """Validate a list of parsed character IDs.
+
+    Checks:
+    - Non-empty (for resolved state)
+    - Max 8 characters
+    - Each ID max 80 chars
+    - No NO_LIBRARY_CHARACTER_ID sentinel
+    - No duplicates (preserves order)
+
+    Returns deduplicated list or raises SmartAgentError.
+    """
+    if not char_ids:
+        raise SmartAgentError(
+            "人物选择结果无效，请重新选择。",
+            code="invalid_character_resolution",
+        )
+    seen: set[str] = set()
+    result: list[str] = []
+    for cid in char_ids:
+        cid = str(cid or "").strip()
+        if not cid:
+            raise SmartAgentError(
+                "人物选择结果无效，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        if cid == "__no_library_character__":
+            raise SmartAgentError(
+                "人物选择结果无效，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        if len(cid) > MAX_CHARACTER_ID_LENGTH:
+            raise SmartAgentError(
+                "人物 ID 过长，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        if cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    if len(result) > MAX_CHARACTERS_PER_TASK:
+        raise SmartAgentError(
+            f"人物数量不能超过 {MAX_CHARACTERS_PER_TASK} 个。",
+            code="invalid_character_resolution",
+        )
+    return result
 
 
 ALWAYS_FORBIDDEN_REQUEST_PATTERNS = [
@@ -151,12 +235,7 @@ async def build_smart_agent_plan(
     if decision == "resolved":
         # User selected specific characters → use them directly
         from .disambiguation_engine import characters_from_public_ids
-        char_ids = parse_character_ids(task_character_key)
-        if not char_ids:
-            raise SmartAgentError(
-                "人物选择结果无效，请重新选择。",
-                code="invalid_character_resolution",
-            )
+        char_ids = validate_character_ids(parse_character_ids(task_character_key))
         characters = characters_from_public_ids(char_ids)
         loaded_ids = {
             str(item.get("key") or item.get("identity_key") or "").strip()
@@ -175,6 +254,13 @@ async def build_smart_agent_plan(
         character_tag_source = "character_registry"
     elif decision == "disabled":
         # User chose "都不是" (skip library) or no character found → no library matching
+        # Disabled state must NOT have character IDs
+        disabled_ids = parse_character_ids(task_character_key)
+        if disabled_ids:
+            raise SmartAgentError(
+                "人物选择结果无效，请重新选择。",
+                code="invalid_character_resolution",
+            )
         character_tag_source = "none"
     elif decision == "invalid":
         # Unknown or contradictory state → safe failure, no fallback
