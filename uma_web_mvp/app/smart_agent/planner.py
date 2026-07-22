@@ -35,6 +35,74 @@ class SmartAgentClarification(SmartAgentError):
         super().__init__(question, code="smart_agent_needs_clarification")
 
 
+# ── Character decision classification ───────────────────────────────
+
+# All known task-level prompt_source values that carry a character decision.
+_RESOLVED_SOURCES = {"agent_character_resolved"}
+_DISABLED_SOURCES = {"agent_character_no_library", "agent_no_character"}
+# Values that are valid but carry no character decision (legacy/direct).
+_LEGACY_SOURCES = {"", "smart_agent", "smart_agent+character_registry", "smart_agent_v2"}
+_KNOWN_SOURCES = _RESOLVED_SOURCES | _DISABLED_SOURCES | _LEGACY_SOURCES
+
+
+def _classify_task_character_decision(prompt_source: str) -> str:
+    """Classify a task's prompt_source into an internal character decision state.
+
+    Returns:
+        "resolved"  — user confirmed specific characters
+        "disabled"  — user chose to skip library, or no character found
+        "legacy"    — no character decision data (historical tasks, direct prompts)
+        "invalid"   — unknown or contradictory state; must not fall back to search
+    """
+    if prompt_source in _RESOLVED_SOURCES:
+        return "resolved"
+    if prompt_source in _DISABLED_SOURCES:
+        return "disabled"
+    if prompt_source in _LEGACY_SOURCES:
+        return "legacy"
+    # Unknown non-empty value → invalid (do NOT treat as legacy)
+    return "invalid"
+
+
+def serialize_character_ids(character_ids: list[str]) -> str:
+    """Serialize a list of character IDs to a compact JSON array string.
+
+    Deduplicates while preserving order.  Returns "[]" for empty input.
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for cid in character_ids:
+        cid = str(cid or "").strip()
+        if cid and cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_character_ids(raw: str) -> list[str]:
+    """Parse a character_key field into a list of character IDs.
+
+    Supports both formats:
+    - New JSON array: ["id1","id2"]
+    - Legacy comma-separated: "id1,id2"
+
+    Returns [] for empty/invalid input.
+    """
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    # Try JSON array first
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Fall back to comma-separated (legacy format)
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 ALWAYS_FORBIDDEN_REQUEST_PATTERNS = [
     r"\b(video|animation|animated|mp4|gif|movie clip)\b",
     r"(未成年.*裸|儿童.*色情|儿童.*裸)",
@@ -78,12 +146,13 @@ async def build_smart_agent_plan(
     original_character_name = ""
     character_tag_source = ""
 
-    if task_prompt_source == "agent_character_resolved" and task_character_key:
+    decision = _classify_task_character_decision(task_prompt_source)
+
+    if decision == "resolved":
         # User selected specific characters → use them directly
         from .disambiguation_engine import characters_from_public_ids
-        char_ids = [s.strip() for s in task_character_key.split(",") if s.strip()]
+        char_ids = parse_character_ids(task_character_key)
         if not char_ids:
-            # Invalid state: resolved but no character IDs → safe failure
             raise SmartAgentError(
                 "人物选择结果无效，请重新选择。",
                 code="invalid_character_resolution",
@@ -96,7 +165,6 @@ async def build_smart_agent_plan(
         }
         missing_ids = [cid for cid in char_ids if cid not in loaded_ids]
         if missing_ids:
-            # Some resolved IDs don't exist in the character library → safe failure
             raise SmartAgentError(
                 "人物选择结果无效，请重新选择。",
                 code="invalid_character_resolution",
@@ -105,17 +173,17 @@ async def build_smart_agent_plan(
             item["character_tag_source"] = "character_registry"
             item["match_stage"] = "confirmed_resolution"
         character_tag_source = "character_registry"
-    elif task_prompt_source in {"agent_character_no_library", "agent_no_character"}:
+    elif decision == "disabled":
         # User chose "都不是" (skip library) or no character found → no library matching
         character_tag_source = "none"
-    elif task_prompt_source == "agent_character_resolved":
-        # Invalid state: resolved but character_key is empty → safe failure
+    elif decision == "invalid":
+        # Unknown or contradictory state → safe failure, no fallback
         raise SmartAgentError(
             "人物选择结果无效，请重新选择。",
             code="invalid_character_resolution",
         )
     else:
-        # No pre-resolved decision (legacy tasks, direct prompt, etc.) → match from scratch
+        # legacy: no character decision data → match from scratch
         characters = _dedupe_character_matches(find_characters(request_text))
         if not characters:
             candidate_cn = extract_possible_character_names(request_text)

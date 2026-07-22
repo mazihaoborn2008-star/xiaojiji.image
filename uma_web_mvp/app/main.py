@@ -154,12 +154,11 @@ from .schemas import (
     UserSession,
 )
 from .services.mimo_review import auto_status_from_result, review_deformed_images
-from .smart_agent.planner import SmartAgentClarification, SmartAgentError, build_smart_agent_plan, plan_to_json, _validate_request_policy
+from .smart_agent.planner import SmartAgentClarification, SmartAgentError, build_smart_agent_plan, plan_to_json, _validate_request_policy, serialize_character_ids, parse_character_ids
 from .smart_agent.chat_client import chat_with_agent
 from .smart_agent.sanitize import sanitize_public_agent_message
 from .smart_agent.character_search import find_characters, find_character_after_translation, load_characters, extract_possible_character_names, translate_character_name, build_agent_fallback_character, strip_umamusume_identity_tags, detect_character_disambiguation, resolve_character_from_candidates
 from .smart_agent.disambiguation_engine import (
-    NO_LIBRARY_CHARACTER_ID,
     analyze_character_mentions,
     analyze_user_request,
     create_pending_disambiguation_json,
@@ -6023,10 +6022,10 @@ def _prepare_translation_agent_character_resolution(
         ]
         skipped = list(validated.get("skippedMentions") or [])
         if character_ids:
-            return "agent_character_resolved", ",".join(dict.fromkeys(character_ids))[:120]
+            return "agent_character_resolved", serialize_character_ids(character_ids)
         if skipped:
-            return "agent_character_no_library", NO_LIBRARY_CHARACTER_ID
-        return "agent_no_character", ""
+            return "agent_character_no_library", "[]"
+        return "agent_no_character", "[]"
 
     parsed = analyze_character_mentions(prompt)
     if parsed.get("status") in {"ambiguous", "mixed"}:
@@ -6047,8 +6046,8 @@ def _prepare_translation_agent_character_resolution(
         if str(item.get("characterId") or "").strip()
     ]
     if character_ids:
-        return "agent_character_resolved", ",".join(dict.fromkeys(character_ids))[:120]
-    return "agent_no_character", ""
+        return "agent_character_resolved", serialize_character_ids(character_ids)
+    return "agent_no_character", "[]"
 
 
 @app.post("/api/tasks")

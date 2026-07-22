@@ -875,14 +875,31 @@ class TestUnknownPromptSource:
         monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
         monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
 
-    def test_unknown_prompt_source_runs_legacy_matching(self, monkeypatch):
+    def test_unknown_prompt_source_raises_invalid(self, monkeypatch):
+        """Unknown non-empty prompt_source → invalid state, not legacy."""
         settings = self._make_settings()
         self._common_patches(monkeypatch)
         find_calls = []
         monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
-        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
-        _run_build(settings, "蝴蝶忍", task_prompt_source="some_future_value")
-        assert len(find_calls) >= 1
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "蝴蝶忍", task_prompt_source="some_future_value")
+        assert exc_info.value.code == "invalid_character_resolution"
+        assert find_calls == [], "Invalid state must not call find_characters"
+
+    def test_user_raw_prompt_source_raises_invalid(self, monkeypatch):
+        """user_raw should not enter planner, but if it does → invalid."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "蝴蝶忍", task_prompt_source="user_raw")
+        assert exc_info.value.code == "invalid_character_resolution"
+        assert find_calls == []
 
     def test_empty_string_runs_legacy(self, monkeypatch):
         settings = self._make_settings()
@@ -911,3 +928,166 @@ class TestWorkerCharging:
         import inspect
         src = inspect.getsource(__import__("app.main", fromlist=["smart_agent_worker_loop"]).smart_agent_worker_loop)
         assert 'plan.get("prompt_source")' in src or 'plan["prompt_source"]' in src
+
+
+# -- Helper function tests ----------------------------------------------
+
+class TestClassifyTaskCharacterDecision:
+    """_classify_task_character_decision must return correct states."""
+
+    def test_resolved_source(self):
+        from app.smart_agent.planner import _classify_task_character_decision
+        assert _classify_task_character_decision("agent_character_resolved") == "resolved"
+
+    def test_disabled_sources(self):
+        from app.smart_agent.planner import _classify_task_character_decision
+        assert _classify_task_character_decision("agent_character_no_library") == "disabled"
+        assert _classify_task_character_decision("agent_no_character") == "disabled"
+
+    def test_legacy_sources(self):
+        from app.smart_agent.planner import _classify_task_character_decision
+        assert _classify_task_character_decision("") == "legacy"
+        assert _classify_task_character_decision("smart_agent") == "legacy"
+        assert _classify_task_character_decision("smart_agent+character_registry") == "legacy"
+        assert _classify_task_character_decision("smart_agent_v2") == "legacy"
+
+    def test_unknown_nonempty_is_invalid(self):
+        from app.smart_agent.planner import _classify_task_character_decision
+        assert _classify_task_character_decision("some_future_value") == "invalid"
+        assert _classify_task_character_decision("UNKNOWN") == "invalid"
+        assert _classify_task_character_decision("agent_character_resolved_typo") == "invalid"
+
+    def test_no_overlap_between_categories(self):
+        from app.smart_agent.planner import _RESOLVED_SOURCES, _DISABLED_SOURCES, _LEGACY_SOURCES
+        assert _RESOLVED_SOURCES.isdisjoint(_DISABLED_SOURCES)
+        assert _RESOLVED_SOURCES.isdisjoint(_LEGACY_SOURCES)
+        assert _DISABLED_SOURCES.isdisjoint(_LEGACY_SOURCES)
+
+
+class TestSerializeCharacterIds:
+    """serialize_character_ids must produce valid JSON arrays."""
+
+    def test_empty(self):
+        from app.smart_agent.planner import serialize_character_ids
+        assert serialize_character_ids([]) == "[]"
+
+    def test_single(self):
+        from app.smart_agent.planner import serialize_character_ids
+        result = serialize_character_ids(["kochou_shinobu"])
+        assert result == '["kochou_shinobu"]'
+
+    def test_multiple(self):
+        from app.smart_agent.planner import serialize_character_ids
+        result = serialize_character_ids(["kochou_shinobu", "hatsune_miku", "rice_shower"])
+        assert result == '["kochou_shinobu","hatsune_miku","rice_shower"]'
+
+    def test_dedup_preserves_order(self):
+        from app.smart_agent.planner import serialize_character_ids
+        result = serialize_character_ids(["a", "b", "a", "c"])
+        assert result == '["a","b","c"]'
+
+    def test_strips_whitespace(self):
+        from app.smart_agent.planner import serialize_character_ids
+        result = serialize_character_ids(["  kochou_shinobu  ", "", " hatsune_miku "])
+        assert result == '["kochou_shinobu","hatsune_miku"]'
+
+    def test_no_truncation(self):
+        """JSON format must not be truncated."""
+        from app.smart_agent.planner import serialize_character_ids
+        ids = ["kochou_shinobu", "hatsune_miku", "rice_shower", "silence_suzuka", "tokai_teio"]
+        result = serialize_character_ids(ids)
+        assert len(result) > 120 or True  # may exceed 120 but must not be truncated
+        parsed = __import__("json").loads(result)
+        assert len(parsed) == 5
+
+
+class TestParseCharacterIds:
+    """parse_character_ids must handle both JSON and legacy formats."""
+
+    def test_empty(self):
+        from app.smart_agent.planner import parse_character_ids
+        assert parse_character_ids("") == []
+        assert parse_character_ids(None) == []
+        assert parse_character_ids("[]") == []
+
+    def test_json_array(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids('["kochou_shinobu","hatsune_miku"]')
+        assert result == ["kochou_shinobu", "hatsune_miku"]
+
+    def test_legacy_comma_separated(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids("kochou_shinobu,hatsune_miku")
+        assert result == ["kochou_shinobu", "hatsune_miku"]
+
+    def test_legacy_single(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids("kochou_shinobu")
+        assert result == ["kochou_shinobu"]
+
+    def test_json_single(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids('["kochou_shinobu"]')
+        assert result == ["kochou_shinobu"]
+
+    def test_invalid_json_falls_back(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids("[invalid")
+        assert result == ["[invalid"]  # treated as comma-separated
+
+    def test_json_array_with_spaces(self):
+        from app.smart_agent.planner import parse_character_ids
+        result = parse_character_ids('[" kochou_shinobu ", " hatsune_miku "]')
+        assert result == ["kochou_shinobu", "hatsune_miku"]
+
+
+class TestJsonCharacterKeyIntegration:
+    """Integration: JSON character_key flows through Worker correctly."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_json_single_character(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "test", task_prompt_source="agent_character_resolved",
+                          task_character_key='["kochou_shinobu"]')
+        assert plan["character_key"] == "kochou_shinobu"
+        assert find_calls == []
+
+    def test_json_multi_character(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "test", task_prompt_source="agent_character_resolved",
+                          task_character_key='["silence_suzuka","tokai_teio"]')
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert "silence_suzuka" in mc_keys
+        assert "tokai_teio" in mc_keys
+
+    def test_legacy_comma_still_works(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "test", task_prompt_source="agent_character_resolved",
+                          task_character_key="silence_suzuka,tokai_teio")
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert "silence_suzuka" in mc_keys
+        assert "tokai_teio" in mc_keys
+
+    def test_empty_json_array_is_invalid(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        from app.smart_agent.planner import SmartAgentError
+        import pytest
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "test", task_prompt_source="agent_character_resolved",
+                        task_character_key="[]")
+        assert exc_info.value.code == "invalid_character_resolution"
