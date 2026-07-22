@@ -204,7 +204,7 @@ def test_mock_worker_success_failed_timeout():
         }
         assert statuses["GEN-BBBBBBBBBBBB"] == "done"
         assert statuses["GEN-CCCCCCCCCCCC"] == "failed_refunded"
-        assert statuses["GEN-DDDDDDDDDDDD"] == "processing"
+        assert statuses["GEN-DDDDDDDDDDDD"] == "failed_refunded"
         assert conn.execute("SELECT COUNT(*) FROM generation_outputs WHERE job_code='GEN-BBBBBBBBBBBB'").fetchone()[0] == 1
     finally:
         conn.close()

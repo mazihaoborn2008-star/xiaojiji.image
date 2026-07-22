@@ -736,6 +736,9 @@ def calculate_generation_charge(
     return base_cost + agent_surcharge
 
 
+_ALLOWED_MOCK_RESULTS = {"", "success", "failed", "timeout"}
+
+
 def create_task_atomic(
     settings: Settings,
     *, job_code: str, user_id: str, username: str, prompt: str, style_key: str,
@@ -745,6 +748,13 @@ def create_task_atomic(
     prompt_source: str = "", character_key: str = "", mock_result: str = "",
     original_prompt: str | None = None,
 ) -> dict[str, Any]:
+    clean_mock = str(mock_result or "").strip().lower()
+    if clean_mock:
+        if not (settings.is_local_env() and settings.mock_worker_enabled):
+            raise RuntimeError("mock_result is only allowed in local test environment")
+        if clean_mock not in _ALLOWED_MOCK_RESULTS:
+            raise RuntimeError(f"invalid mock_result: {clean_mock}")
+        mock_result = clean_mock
     validate_task_payload(
         user_id=user_id, mode=mode, style_key=style_key, prompt=prompt, width=width, height=height,
         denoise=denoise, control_type=control_type, control_character=control_character,

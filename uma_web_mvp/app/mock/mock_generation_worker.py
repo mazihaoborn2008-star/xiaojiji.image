@@ -40,7 +40,7 @@ def claim_one(settings: Settings) -> dict[str, Any] | None:
         if not row:
             conn.commit()
             return None
-        conn.execute(
+        cur = conn.execute(
             """
             UPDATE generation_tasks
             SET status='processing', started_at=?, active_started_at=?
@@ -48,6 +48,9 @@ def claim_one(settings: Settings) -> dict[str, Any] | None:
             """,
             (now, now, row["job_code"]),
         )
+        if cur.rowcount != 1:
+            conn.commit()
+            return None
         conn.commit()
         return dict(row)
     except Exception:
@@ -86,7 +89,16 @@ def _create_placeholder(settings: Settings, job_code: str) -> Path:
 def complete_success(settings: Settings, row: dict[str, Any]) -> None:
     now = int(time.time())
     job_code = str(row["job_code"])
-    path = _create_placeholder(settings, job_code)
+    user_id = str(row["user_id"])
+    charged = int(row.get("charged_fen") or 0)
+    partial_path: Path | None = None
+    try:
+        partial_path = _create_placeholder(settings, job_code)
+    except Exception as exc:
+        print(f"[LOCAL MOCK WORKER] PIL failed job={job_code} err={type(exc).__name__}", flush=True)
+        _complete_failed_with_refund(settings, job_code=job_code, user_id=user_id, charged=charged,
+                                     error="LOCAL MOCK output failed", error_code="mock_output_failed")
+        return
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -96,7 +108,7 @@ def complete_success(settings: Settings, row: dict[str, Any]) -> None:
             return
         conn.execute(
             "INSERT OR IGNORE INTO generation_outputs(job_code,label,file_path,created_at) VALUES (?,?,?,?)",
-            (job_code, "mock output", str(path), now),
+            (job_code, "mock output", str(partial_path), now),
         )
         conn.execute(
             "UPDATE generation_tasks SET status='done', effective_prompt=prompt, finished_at=? WHERE job_code=?",
@@ -104,15 +116,35 @@ def complete_success(settings: Settings, row: dict[str, Any]) -> None:
         )
         conn.commit()
         print(f"[LOCAL MOCK WORKER] completed job={job_code}", flush=True)
+    except Exception as exc:
+        conn.rollback()
+        print(f"[LOCAL MOCK WORKER] db failed job={job_code} err={type(exc).__name__}", flush=True)
+        _safe_cleanup_file(partial_path)
+        _complete_failed_with_refund(settings, job_code=job_code, user_id=user_id, charged=charged,
+                                     error="LOCAL MOCK output failed", error_code="mock_output_failed")
     finally:
         conn.close()
 
 
-def complete_failed(settings: Settings, row: dict[str, Any]) -> None:
+def _safe_cleanup_file(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _complete_failed_with_refund(
+    settings: Settings,
+    *,
+    job_code: str,
+    user_id: str,
+    charged: int,
+    error: str = "LOCAL MOCK failed",
+    error_code: str = "mock_failed",
+) -> None:
     now = int(time.time())
-    job_code = str(row["job_code"])
-    user_id = str(row["user_id"])
-    charged = int(row.get("charged_fen") or 0)
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -131,26 +163,35 @@ def complete_failed(settings: Settings, row: dict[str, Any]) -> None:
                 (user_id, charged, MOCK_REFUND_REASON, job_code, "local_mock_worker", now),
             )
         conn.execute(
-            "UPDATE generation_tasks SET status='failed_refunded', error='LOCAL MOCK failed', error_code='mock_failed', finished_at=? WHERE job_code=?",
-            (now, job_code),
+            "UPDATE generation_tasks SET status='failed_refunded', error=?, error_code=?, finished_at=? WHERE job_code=?",
+            (error, error_code, now, job_code),
         )
         conn.commit()
-        print(f"[LOCAL MOCK WORKER] failed_refunded job={job_code}", flush=True)
+        print(f"[LOCAL MOCK WORKER] failed_refunded job={job_code} code={error_code}", flush=True)
     finally:
         conn.close()
+
+
+def complete_failed(settings: Settings, row: dict[str, Any]) -> None:
+    _complete_failed_with_refund(
+        settings,
+        job_code=str(row["job_code"]),
+        user_id=str(row["user_id"]),
+        charged=int(row.get("charged_fen") or 0),
+        error="LOCAL MOCK failed",
+        error_code="mock_failed",
+    )
 
 
 def leave_timeout(settings: Settings, row: dict[str, Any]) -> None:
-    conn = connect(settings)
-    try:
-        conn.execute(
-            "UPDATE generation_tasks SET error_code='mock_timeout' WHERE job_code=? AND status='processing'",
-            (row["job_code"],),
-        )
-        conn.commit()
-        print(f"[LOCAL MOCK WORKER] timeout_left_processing job={row['job_code']}", flush=True)
-    finally:
-        conn.close()
+    _complete_failed_with_refund(
+        settings,
+        job_code=str(row["job_code"]),
+        user_id=str(row["user_id"]),
+        charged=int(row.get("charged_fen") or 0),
+        error="LOCAL MOCK timeout",
+        error_code="mock_timeout",
+    )
 
 
 def process_once(settings: Settings) -> bool:
