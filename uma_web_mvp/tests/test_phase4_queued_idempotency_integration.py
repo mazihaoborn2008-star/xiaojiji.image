@@ -376,6 +376,37 @@ class TestQueuedConflictDetection:
             create_smart_agent_queued_task_atomic(
                 settings, client_request_id=cid, **_make_queued_args(character_key="char_b")
             )
+    def test_different_dimensions_raises_conflict(self):
+        case_root = _case_root()
+        settings = _make_settings(case_root)
+        _seed_balance(settings, TEST_USER, 50000)
+        cid = f"qconfdim-{uuid.uuid4().hex[:8]}"
+
+        create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args(width=1024, height=1536)
+        )
+
+        with pytest.raises(ValueError, match="client_request_id_conflict"):
+            create_smart_agent_queued_task_atomic(
+                settings, client_request_id=cid, **_make_queued_args(width=512, height=512)
+            )
+
+    def test_different_prompt_source_raises_conflict(self):
+        case_root = _case_root()
+        settings = _make_settings(case_root)
+        _seed_balance(settings, TEST_USER, 50000)
+        cid = f"qconfps-{uuid.uuid4().hex[:8]}"
+
+        create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args(prompt_source="smart_agent")
+        )
+
+        with pytest.raises(ValueError, match="client_request_id_conflict"):
+            create_smart_agent_queued_task_atomic(
+                settings, client_request_id=cid, **_make_queued_args(prompt_source="user_raw")
+            )
+
+
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -557,6 +588,117 @@ class TestQueuedRefundFaultInjection:
             assert row["status"] == "smart_planning"
         finally:
             conn.close()
+
+
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# E. Response Loss Retry
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestQueuedResponseLossRetry:
+    """Simulate HTTP response loss and verify safe retry."""
+
+    def test_retry_after_response_loss_returns_same_task(self):
+        case_root = _case_root()
+        settings = _make_settings(case_root)
+        _seed_balance(settings, TEST_USER, 50000)
+        cid = f"qretry-{uuid.uuid4().hex[:8]}"
+
+        r1 = create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args()
+        )
+        bal = _get_balance(settings, TEST_USER)
+
+        # Simulate response loss: client doesn't use r1, retries same request
+        r2 = create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args()
+        )
+
+        assert r1["job_code"] == r2["job_code"]
+        assert r2.get("deduped") is True
+        assert _get_balance(settings, TEST_USER) == bal
+        assert _count_tasks(settings, TEST_USER) == 1
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# F. Exact Balance Concurrent
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestQueuedExactBalanceConcurrent:
+    """Concurrent requests with exact-balance should not create negative balance."""
+
+    def test_exact_balance_concurrent_no_negative(self):
+        case_root = _case_root()
+        settings = _make_settings(case_root)
+        _seed_balance(settings, TEST_USER, 5)  # Exactly enough for one
+        cid = f"qexact-{uuid.uuid4().hex[:8]}"
+
+        results = []
+        errors = []
+        barrier = threading.Barrier(2, timeout=10)
+
+        def _create():
+            try:
+                barrier.wait()
+                r = create_smart_agent_queued_task_atomic(
+                    settings, client_request_id=cid, **_make_queued_args()
+                )
+                results.append(r)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=_create) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert len(results) >= 1
+        bal = _get_balance(settings, TEST_USER)
+        assert bal >= 0, f"Balance went negative: {bal}"
+        assert _count_tasks(settings, TEST_USER) == 1
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# G. Task Completion Replay
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestQueuedTaskCompletionReplay:
+    """Replay after task completion should return original task."""
+
+    def test_replay_after_completion_returns_original(self):
+        case_root = _case_root()
+        settings = _make_settings(case_root)
+        _seed_balance(settings, TEST_USER, 50000)
+        cid = f"qreplay-{uuid.uuid4().hex[:8]}"
+
+        r1 = create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args()
+        )
+        job = r1["job_code"]
+
+        # Simulate task completion
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET status='done', finished_at=? WHERE job_code=?",
+                (1000, job),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        bal = _get_balance(settings, TEST_USER)
+
+        # Replay same request
+        r2 = create_smart_agent_queued_task_atomic(
+            settings, client_request_id=cid, **_make_queued_args()
+        )
+
+        assert r2["job_code"] == job
+        assert _get_balance(settings, TEST_USER) == bal
+        assert _count_tasks(settings, TEST_USER) == 1
 
 
 if __name__ == "__main__":
