@@ -147,6 +147,19 @@ def validate_character_resolution(
             resolved_characters.append(matched)
             selected_ids.add(selected_id)
 
+    # Fallback: parser found no mentions but user provided selections.
+    # Directly validate selected character IDs against the library.
+    if not resolved_characters and selections:
+        from .character_search import load_characters
+        library = {str(_public_character_id(c)): c for c in load_characters()}
+        for sel in selections:
+            sid = str(sel.get("characterId") or sel.get("selectedCharacterId") or "").strip()
+            if not sid or sid == NO_LIBRARY_CHARACTER_ID:
+                continue
+            if sid in library and sid not in selected_ids:
+                resolved_characters.append(library[sid])
+                selected_ids.add(sid)
+
     return {
         "status": "resolved" if resolved_characters else "not_found",
         "resolvedCharacters": resolved_characters,

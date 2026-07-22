@@ -91,9 +91,9 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
     if resolution:
         validated = validate_character_resolution(prompt, resolution)
         ids = [
-            str(item.get("characterId") or "").strip()
+            str(item.get("characterId") or item.get("key") or "").strip()
             for item in validated.get("resolvedCharacters", []) or []
-            if str(item.get("characterId") or "").strip()
+            if str(item.get("characterId") or item.get("key") or "").strip()
         ]
         skipped = list(validated.get("skippedMentions") or [])
         if ids:

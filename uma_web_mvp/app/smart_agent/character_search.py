@@ -63,6 +63,7 @@ UMAMUSUME_ZH_ALIASES = {
     "venus paques": ["芙卓", "维纳斯帕克斯", "维纳斯帕克"],
     "smart falcon": ["醒目飞鹰", "飞鹰"],
     "vivlos": ["强击", "维布洛斯", "ヴィブロス"],
+    "gold city": ["黄金城"],
 }
 
 UMAMUSUME_IDENTITY_TAGS = {
@@ -401,7 +402,7 @@ def _split_aliases(value: Any) -> list[str]:
     if isinstance(value, list):
         parts = value
     else:
-        parts = re.split(r"[,，\n]+", str(value or ""))
+        parts = re.split(r"[,,\n]+", str(value or ""))
     return [str(part).strip() for part in parts if str(part).strip()]
 
 
@@ -597,19 +598,19 @@ def _strip_artist_spans(text: str) -> str:
 def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
     """从输入文本中匹配人物。
 
-    核心规则：
-    1. 长匹配优先 — 完整人物名匹配后，其子串不得再匹配其他人物；
-    2. 同一人物只返回一次（按 key 去重）；
+    核心规则:
+    1. 长匹配优先 - 完整人物名匹配后,其子串不得再匹配其他人物;
+    2. 同一人物只返回一次(按 key 去重);
     3. 按 (score, best_term_length) 降序排列。
-    4. 当正向匹配无结果时，自动使用反向 CJK 子串匹配（'麻美' → '七海麻美'）。
+    4. 当正向匹配无结果时,自动使用反向 CJK 子串匹配('麻美' → '七海麻美')。
     """
     # Strip artist-like spans from input BEFORE matching
     raw_text = _strip_artist_spans(text or "")
     haystack_zh = _normalize_cjk_text(raw_text)
     haystack_en = _canonical_name_key(raw_text)
 
-    # ── 第一遍：收集所有可能的 (character, term, score, term_len, match_position) ──
-    # match_position: 在 haystack_en 中的字符索引，用于 span 占位
+    # ── 第一遍:收集所有可能的 (character, term, score, term_len, match_position) ──
+    # match_position: 在 haystack_en 中的字符索引,用于 span 占位
     candidate_matches: list[tuple[int, int, int, int, dict[str, str]]] = []  # (score, term_len, match_pos, char_idx, item)
     characters = load_characters()
     for char_idx, item in enumerate(characters):
@@ -672,10 +673,10 @@ def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
                     term_len = len(tag_key)
                     candidate_matches.append((3, term_len, 0, char_idx, item))
 
-    # ── 排序：score 降序 → term_len 降序 ──
+    # ── 排序:score 降序 → term_len 降序 ──
     candidate_matches.sort(key=lambda t: (-t[0], -t[1]))
 
-    # ── 第二遍：按优先级分配，长匹配占位后短匹配跳过 ──
+    # ── 第二遍:按优先级分配,长匹配占位后短匹配跳过 ──
     result: list[dict[str, str]] = []
     seen_keys: set[str] = set()
     occupied_spans: list[tuple[int, int, str]] = []  # (start, end, term_canonical)
@@ -715,14 +716,14 @@ def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
             end = match_pos + len(norm)
 
         # 检查是否完全被已占用 span 覆盖
-        # 特殊情况：允许多个角色共享同一输入子串作为歧义候选：
-        # 1. 新匹配的 term 更短且同一起始位置（如 '爱丽丝' vs '天童爱丽丝'）
-        # 2. 新匹配的 term 完全相同（不同角色同名，如两个 '爱丽丝' 来自不同作品）
+        # 特殊情况:允许多个角色共享同一输入子串作为歧义候选:
+        # 1. 新匹配的 term 更短且同一起始位置(如 '爱丽丝' vs '天童爱丽丝')
+        # 2. 新匹配的 term 完全相同(不同角色同名,如两个 '爱丽丝' 来自不同作品)
         # 这些情况下需要返回所有候选供用户确认。
         fully_occupied = False
         for occ_start, occ_end, occ_term in occupied_spans:
             if occ_start <= start and end <= occ_end:
-                # 同一起始位置 + 新 term 更短或相同 → 歧义候选，不跳过
+                # 同一起始位置 + 新 term 更短或相同 → 歧义候选,不跳过
                 if start == occ_start and len(norm) <= len(occ_term):
                     continue
                 fully_occupied = True
@@ -742,14 +743,14 @@ def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
         if len(result) >= limit:
             break
 
-    # ── 反向 CJK 子串匹配：从用户输入中提取 CJK 片段，匹配角色名 ──
-    # 例如用户输入 '生成几个麻美的图'，提取 2-4 字 CJK 片段，
+    # ── 反向 CJK 子串匹配:从用户输入中提取 CJK 片段,匹配角色名 ──
+    # 例如用户输入 '生成几个麻美的图',提取 2-4 字 CJK 片段,
     # 然后发现 '麻美' 是 '七海麻美' 和 '巴麻美' 的子串。
-    # 注意：始终执行（不仅限于 result 为空时），以便歧义候选能被完整收集。
+    # 注意:始终执行(不仅限于 result 为空时),以便歧义候选能被完整收集。
     if haystack_zh and len(haystack_zh) >= 2:
         has_cjk_input = any("\u3400" <= ch <= "\u9fff" for ch in haystack_zh)
         if has_cjk_input:
-            # 提取所有 CJK 连续片段，以及滑动窗口 2-4 字子串
+            # 提取所有 CJK 连续片段,以及滑动窗口 2-4 字子串
             all_cjk_parts: set[str] = set()
             # 完整 CJK runs
             for run in re.findall(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]{2,}", raw_text):
@@ -757,10 +758,10 @@ def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
                 if norm_run and len(norm_run) >= 2:
                     all_cjk_parts.add(norm_run)
             # 滑动窗口提取 2-4 字子串（用于长句中的短名字匹配）
-            # 仅当输入长度 >= 6 时才使用滑动窗口，避免纯名字输入（如“天童爱丽丝”）
-            # 产生短子串误匹配（如“爱丽”匹配到爱丽速子）
+            # 仅当输入长度 >= 4 时才使用滑动窗口，避免纯名字输入（如"天童爱丽丝"）
+            # 产生短子串误匹配（如"爱丽"匹配到爱丽速子）
             clean_zh = _normalize_cjk_text(raw_text)
-            if clean_zh and len(clean_zh) >= 6:
+            if clean_zh and len(clean_zh) >= 4:
                 # Extract CJK-only runs for sliding window (ASCII substrings from
                 # alphanumeric input like "yukikazeazurlane" must NOT match character
                 # names like "MEIKO" via substring "ik").
@@ -777,11 +778,35 @@ def find_characters(text: str, *, limit: int = 8) -> list[dict[str, str]]:
                 name_zh_norm = _normalize_cjk_text(str(item.get("name_zh") or ""))
                 if not name_zh_norm:
                     continue
-                # 检查是否有任何 CJK 片段是角色名的子串
+                # 检查是否有任何 CJK 片段是角色名或别名的子串
                 matched = False
+                name_zh_in_haystack = name_zh_norm in haystack_zh
+                alias_zh_norms = [_normalize_cjk_text(a) for a in _split_aliases(item.get("aliases")) if any("\u3400" <= ch <= "\u9fff" for ch in str(a))]
+                alias_in_haystack = any(a in haystack_zh for a in alias_zh_norms if a)
                 for candidate in all_cjk_parts:
-                    if len(candidate) >= 2 and candidate in name_zh_norm:
+                    if len(candidate) < 2:
+                        continue
+                    if candidate not in name_zh_norm and not any(candidate in a for a in alias_zh_norms if a):
+                        continue
+                    # 子串匹配时，要求角色全名或别名全名出现在输入中，
+                    # 或者子串是角色名/别名的前缀（从位置0开始）
+                    if name_zh_in_haystack or alias_in_haystack:
                         matched = True
+                        break
+                    # 前缀匹配：子串是角色名的前缀且出现在输入开头附近
+                    # 要求子串至少占角色名长度的一半，避免“黄金”匹配“黄金船”
+                    if (name_zh_norm.startswith(candidate)
+                            and len(candidate) * 2 >= len(name_zh_norm)
+                            and haystack_zh.find(candidate) == 0):
+                        matched = True
+                        break
+                    for a in alias_zh_norms:
+                        if (a and a.startswith(candidate)
+                                and len(candidate) * 2 >= len(a)
+                                and haystack_zh.find(candidate) == 0):
+                            matched = True
+                            break
+                    if matched:
                         break
                 if matched:
                     seen_keys.add(item_key)
@@ -812,7 +837,7 @@ def find_character_after_translation(original_text: str, translated_text: str, *
 
 
 def _normalize_cjk_text(value: str) -> str:
-    return re.sub(r"[\s,，。.!！?？:：;；、_\\/\-()\[\]{}（）【】「」『』·・]+", "", str(value or "").lower())
+    return re.sub(r"[\s,,。.!!??::;;、_\\/\-()\[\]{}()【】「」『』·・]+", "", str(value or "").lower())
 
 
 def _contains_character_term(haystack_zh: str, haystack_en: str, term: str) -> bool:
@@ -848,7 +873,7 @@ def _contains_character_term(haystack_zh: str, haystack_en: str, term: str) -> b
 
 
 def _split_prompt_tags(value: str) -> list[str]:
-    return [part.strip() for part in str(value or "").replace("，", ",").split(",") if part.strip()]
+    return [part.strip() for part in str(value or "").replace(",", ",").split(",") if part.strip()]
 
 
 def _normalize_tags(tags: str, category_en: str) -> str:
@@ -869,7 +894,7 @@ def _normalize_tags(tags: str, category_en: str) -> str:
 
 
 def extract_possible_character_names(text: str) -> str:
-    """从中文文本中提取可能的人物名（用于翻译后再匹配）"""
+    """从中文文本中提取可能的人物名(用于翻译后再匹配)"""
     raw = str(text or "")
     # 移除常见指令词和标点
     stop_words = (
@@ -889,7 +914,7 @@ def extract_possible_character_names(text: str) -> str:
 async def translate_character_name(character_text: str) -> str:
     """调用 DeepSeek/Ollama 翻译中文人物名为英文。
 
-    翻译失败时保留原人物名，绝不抛出异常。
+    翻译失败时保留原人物名,绝不抛出异常。
     """
     if not character_text or not any("\u4e00" <= ch <= "\u9fff" for ch in character_text):
         return character_text
@@ -899,12 +924,12 @@ async def translate_character_name(character_text: str) -> str:
         result = str(translated or "").strip().split("\n")[0].strip()
         if result and result != character_text:
             # 清理翻译结果中的残留 CJK 和多余空白
-            result = re.sub(r"[\s,，。.!！?？:：;；]+", " ", result).strip()
+            result = re.sub(r"[\s,,。.!!??::;;]+", " ", result).strip()
             if result:
                 return result
     except Exception as exc:
         print(f"[TRANSLATOR] character_name_translate_failed text={character_text[:20]} error={type(exc).__name__}", flush=True)
-    # 翻译失败：返回原名，后续流程会用 original CJK 做匹配或 fallback
+    # 翻译失败:返回原名,后续流程会用 original CJK 做匹配或 fallback
     return character_text
 
 
@@ -940,7 +965,7 @@ def strip_umamusume_identity_tags(text: str) -> str:
         # 移除赛马娘身份 tag
         if lower in UMAMUSUME_IDENTITY_TAGS:
             continue
-        # 移除分类暗示 tag，比如 "xxx (umamusume)" → 整体移除
+        # 移除分类暗示 tag,比如 "xxx (umamusume)" → 整体移除
         if any(hint in lower for hint in UMAMUSUME_CATEGORY_IDENTITY_HINT):
             continue
         # 移除 race uniform 变体
@@ -954,7 +979,7 @@ def find_characters_substring(text: str, *, limit: int = 8) -> list[dict[str, st
     """Reverse CJK substring matching: 用户输入是角色名的子串时也能匹配。
 
     例如 '麻美' 能匹配 '七海麻美' 和 '巴麻美'。
-    仅对 CJK 文本做子串匹配，英文不做反向子串匹配（误报率太高）。
+    仅对 CJK 文本做子串匹配,英文不做反向子串匹配(误报率太高)。
     """
     raw_text = _strip_artist_spans(text or "")
     haystack_zh = _normalize_cjk_text(raw_text)
@@ -972,7 +997,7 @@ def find_characters_substring(text: str, *, limit: int = 8) -> list[dict[str, st
         if item_key in seen_keys:
             continue
         name_zh = _normalize_cjk_text(str(item.get("name_zh") or ""))
-        # 反向匹配：用户输入是角色名的子串
+        # 反向匹配:用户输入是角色名的子串
         if name_zh and len(haystack_zh) >= 2 and haystack_zh in name_zh:
             seen_keys.add(item_key)
             tags = _normalize_tags(item["tags"], item.get("category_en", ""))
@@ -990,12 +1015,12 @@ def detect_character_disambiguation(
 ) -> dict[str, Any]:
     """检测人物匹配是否需要用户确认。
 
-    当同一输入词匹配到多个不同 identity_key 时，需要歧义确认。
+    当同一输入词匹配到多个不同 identity_key 时,需要歧义确认。
     返回 {"ambiguous": True, "term": ..., "candidates": [...]} 或 {"ambiguous": False}。
 
-    重要区分：
-    - 同一个输入词匹配多个角色 → 歧义，需要确认
-    - 用户明确输入两个不同角色名 → 合法多人物，不是歧义
+    重要区分:
+    - 同一个输入词匹配多个角色 → 歧义,需要确认
+    - 用户明确输入两个不同角色名 → 合法多人物,不是歧义
     """
     if not characters or len(characters) < 2:
         return {"ambiguous": False}
@@ -1004,10 +1029,10 @@ def detect_character_disambiguation(
     if not haystack_zh:
         return {"ambiguous": False}
 
-    # 按 input_span 分组：哪些角色被同一个输入词匹配到
+    # 按 input_span 分组:哪些角色被同一个输入词匹配到
     # 使用 (normalized_term) 作为 key
     span_groups: dict[str, list[dict[str, str]]] = {}
-    # 预提取输入中的 CJK 片段（用于反向子串匹配）
+    # 预提取输入中的 CJK 片段(用于反向子串匹配)
     cjk_candidates = set()
     for run in re.findall(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]{2,}", raw_text):
         norm_run = _normalize_cjk_text(run)
@@ -1028,14 +1053,14 @@ def detect_character_disambiguation(
         char_name_en = _canonical_name_key(str(character.get("name_en") or ""))
         # 确定是哪个输入词匹配到了这个角色
         matched_term = ""
-        # 正向匹配：角色名在输入中
+        # 正向匹配:角色名在输入中
         if char_name_zh and char_name_zh in haystack_zh:
             matched_term = char_name_zh
         elif char_name_en and char_name_en in _canonical_name_key(raw_text):
             matched_term = char_name_en
         else:
-            # 反向子串匹配：输入的 CJK 片段是角色名的子串
-            # 例如输入 '生成几个麻美的图'，提取 '麻美'，发现是 '七海麻美' 的子串
+            # 反向子串匹配:输入的 CJK 片段是角色名的子串
+            # 例如输入 '生成几个麻美的图',提取 '麻美',发现是 '七海麻美' 的子串
             if char_name_zh:
                 for cjk_candidate in cjk_candidates:
                     if len(cjk_candidate) >= 2 and cjk_candidate in char_name_zh:
@@ -1088,7 +1113,7 @@ def detect_character_disambiguation(
                     franchise_zh = category_zh
                 if category_en:
                     franchise_en = category_en
-                # 从 tags 中提取作品/系列信息（当 category 太泛时）
+                # 从 tags 中提取作品/系列信息(当 category 太泛时)
                 tag_franchise_parts = []
                 for tag in _split_prompt_tags(tags):
                     tag_clean = tag.strip()
@@ -1131,13 +1156,13 @@ def resolve_character_from_candidates(
 ) -> dict[str, Any] | None:
     """从候选列表中解析用户的选择。
 
-    支持：
+    支持:
     - 序号: '第一个', '1', '第一个'
     - 角色名: '七海麻美', 'Nanami Mami'
     - 作品名: '租借女友', 'Kanojo Okarishimasu'
     - 作品名+角色名: '租借女友的麻美'
 
-    返回选中的候选 dict，或 None。
+    返回选中的候选 dict,或 None。
     """
     if not candidates or not user_response:
         return None
@@ -1189,7 +1214,7 @@ def resolve_character_from_candidates(
         if word in lowered and 0 <= index < len(candidates):
             return candidates[index]
 
-    # 2. 按角色名精确匹配（优先最长匹配，如“天童爱丽丝”优先于“爱丽丝”）
+    # 2. 按角色名精确匹配(优先最长匹配,如"天童爱丽丝"优先于"爱丽丝")
     best_name_match = None
     best_name_len = 0
     for candidate in candidates:
@@ -1206,7 +1231,7 @@ def resolve_character_from_candidates(
     if best_name_match:
         return best_name_match
 
-    # 3. 按作品名匹配（中英文 + tag）
+    # 3. 按作品名匹配(中英文 + tag)
     for candidate in candidates:
         franchise_zh = str(candidate.get("franchise_zh") or "").strip()
         franchise_en = str(candidate.get("franchise_en") or "").strip().lower()
@@ -1238,7 +1263,7 @@ def resolve_character_from_candidates(
             if tag_norm and len(tag_norm) >= 3 and tag_norm in lowered:
                 return candidate
 
-    # 3b. 中文部分匹配：用户输入是作品名的前缀/子串（如“东方”匹配“东方Project”）
+    # 3b. 中文部分匹配:用户输入是作品名的前缀/子串(如"东方"匹配"东方Project")
     for candidate in candidates:
         franchise_zh = str(candidate.get("franchise_zh") or "").strip()
         franchise_en = str(candidate.get("franchise_en") or "").strip().lower()
@@ -1270,10 +1295,10 @@ def build_global_identity_index() -> dict[str, set[str]]:
 
     Returns:
         {
-            "identity_tags": set[str],      # 所有人物身份tag（canonical name tags）
+            "identity_tags": set[str],      # 所有人物身份tag(canonical name tags)
             "franchise_tags": set[str],     # 所有作品/franchise tag
-            "category_tags": set[str],      # 分类公共tag（umamusume, vocaloid等）
-            "all_foreign_tags": set[str],   # 以上三者合集（用于过滤外来tag）
+            "category_tags": set[str],      # 分类公共tag(umamusume, vocaloid等)
+            "all_foreign_tags": set[str],   # 以上三者合集(用于过滤外来tag)
         }
     """
     global _GLOBAL_IDENTITY_INDEX
@@ -1285,7 +1310,7 @@ def build_global_identity_index() -> dict[str, set[str]]:
     franchise: set[str] = set()
     category: set[str] = set()
 
-    # 通用非身份tag（外貌、表情等永远不应被视为人物身份tag）
+    # 通用非身份tag(外貌、表情等永远不应被视为人物身份tag)
     GENERIC_APPEARANCE = {
         "1girl", "1boy", "2girls", "2boys", "3girls", "3boys",
         "solo", "multiple girls", "multiple boys",
@@ -1334,6 +1359,6 @@ def build_global_identity_index() -> dict[str, set[str]]:
 
 
 def clear_identity_index_cache() -> None:
-    """清除全局身份索引缓存（用于测试或重载后清除）。"""
+    """清除全局身份索引缓存(用于测试或重载后清除)。"""
     global _GLOBAL_IDENTITY_INDEX
     _GLOBAL_IDENTITY_INDEX = None
