@@ -294,7 +294,7 @@ async def fast_refine_prompt(
         final_prompt = _apply_character_registry_to_refined_prompt(
             raw,
             scene_prompt,
-            resolved_character_ids=character_keys if character_keys else None,
+            resolved_character_ids=character_keys,
             disable_character_library=source == "none" and bool(character_resolution),
         )
         if not final_prompt:

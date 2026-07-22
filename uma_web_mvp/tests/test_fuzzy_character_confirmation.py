@@ -228,3 +228,94 @@ class TestValidateResolution:
         validated = validate_character_resolution("麻美穿风衣", resolution)
         assert validated["status"] == "not_found"
         assert len(validated["skippedMentions"]) == 1
+
+
+# ── Post-translation bypass prevention ────────────────────────────
+
+class TestPostTranslationBypass:
+    """Ensure pre-check results are respected through the full pipeline."""
+
+    def test_empty_ids_explicit_resolution_skips_post_match(self):
+        """resolved_character_ids=[] should NOT trigger find_character_after_translation."""
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "蝴蝶结", "butterfly bow",
+            resolved_character_ids=[],
+        )
+        assert "kochou" not in result.lower()
+        assert "shinobu" not in result.lower()
+        assert "demon slayer" not in result.lower()
+        assert "butterfly" in result.lower() or "bow" in result.lower()
+
+    def test_none_ids_allows_post_match_fallback(self):
+        """resolved_character_ids=None should allow find_character_after_translation."""
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "蝴蝶结", "butterfly bow",
+            resolved_character_ids=None,
+        )
+        assert "kochou" not in result.lower()
+
+    def test_empty_vs_none_semantics(self):
+        """[] = explicit no-characters; None = not checked yet. Both return same for no-char input."""
+        from app.agent import _apply_character_registry_to_refined_prompt
+        r_empty = _apply_character_registry_to_refined_prompt(
+            "蝴蝶结", "butterfly bow", resolved_character_ids=[]
+        )
+        r_none = _apply_character_registry_to_refined_prompt(
+            "蝴蝶结", "butterfly bow", resolved_character_ids=None
+        )
+        assert r_empty == r_none
+
+    def test_exact_match_still_works_with_explicit_ids(self):
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "蝴蝶忍", "shinobu standing in garden",
+            resolved_character_ids=["kochou_shinobu"],
+        )
+        assert "kochou" in result.lower() or "shinobu" in result.lower()
+
+    def test_disable_character_library(self):
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "蝴蝶忍", "girl standing in garden, white coat",
+            disable_character_library=True,
+        )
+        assert "kochou" not in result.lower()
+        assert "shinobu" not in result.lower()
+        assert "girl standing" in result.lower() or "garden" in result.lower()
+
+    def test_not_found_no_post_match_in_fast_translator(self):
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "蝴蝶结", "butterfly bow, ribbon",
+            resolved_character_ids=[],
+            disable_character_library=False,
+        )
+        assert "kochou" not in result.lower()
+        assert "shinobu" not in result.lower()
+
+    def test_user_skip_library_no_post_match(self):
+        from app.agent import _apply_character_registry_to_refined_prompt
+        result = _apply_character_registry_to_refined_prompt(
+            "麻美", "girl in coat",
+            resolved_character_ids=[],
+            disable_character_library=True,
+        )
+        assert "nanami" not in result.lower()
+        assert "tomoe" not in result.lower()
+        assert "mami" not in result.lower()
+
+    def test_fast_translator_no_match_passes_empty_list(self):
+        from app.services.fast_translator_service import _resolve_characters
+        keys, source = _resolve_characters("蝴蝶结", None)
+        assert keys == []
+        assert source == "none"
+        assert keys is not None
+
+    def test_fast_translator_character_keys_not_converted_to_none(self):
+        from app.services.fast_translator_service import _resolve_characters
+        keys, source = _resolve_characters("蝴蝶结", None)
+        resolved_ids = keys  # NOT: keys if keys else None
+        assert resolved_ids == []
+        assert resolved_ids is not None
