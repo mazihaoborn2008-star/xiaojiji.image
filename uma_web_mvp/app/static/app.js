@@ -523,18 +523,18 @@ function renderQueueStatus() {
     return;
   }
   const queued = Number(queueStatusData.queued_total || 0);
-  const smartPlanning = Number(queueStatusData.smart_planning_count || 0);
   const translating = Number(queueStatusData.translating_count || 0);
   const processing = Number(queueStatusData.processing_count || 0);
-  const waitingTasks = smartPlanning + queued + translating + processing;
+  const waitingTasks = queued + translating + processing;
   const wait = Number(queueStatusData.estimated_wait_seconds || 0);
   const generation = getGenerationEstimateSeconds();
-  const agentExtra = isAgentChecked() ? getAgentEstimateSeconds() : 0;
+  const translationMode = getTranslationMode();
+  const agentExtra = translationMode === 'normal' ? getAgentEstimateSeconds() : 0;
   const total = wait + generation + agentExtra;
 
   if (waitingTasks > 0) {
-    appendTextLine(el, t('queue.ahead', `前方任务：${waitingTasks} 个（智能规划 ${smartPlanning} / 翻译中 ${translating} / 出图中 ${processing} / 排队中 ${queued}）`, {
-      count: waitingTasks, smart_planning: smartPlanning, translating, processing, queued,
+    appendTextLine(el, t('queue.ahead', `前方任务：${waitingTasks} 个（翻译中 ${translating} / 出图中 ${processing} / 排队中 ${queued}）`, {
+      count: waitingTasks, translating, processing, queued,
     }));
   } else {
     appendTextLine(el, t('queue.none', '当前无需排队'));
@@ -542,7 +542,11 @@ function renderQueueStatus() {
   if (waitingTasks > 0) {
     appendTextLine(el, t('queue.wait', `预计等待：${approxTime(wait)}`, {time: approxTime(wait)}), 'muted-line');
   }
-  if (agentExtra > 0) {
+  if (translationMode === 'fast') {
+    appendTextLine(el, t('queue.fast_translate', '极速翻译：无需等待翻译时间'), 'muted-line');
+    appendTextLine(el, t('queue.generation', `图片生成：${approxTime(generation)}`, {time: approxTime(generation)}), 'muted-line');
+    appendTextLine(el, t('queue.total', `预计总时间：${approxTime(total)}`, {time: approxTime(total)}));
+  } else if (agentExtra > 0) {
     appendTextLine(el, t('queue.agent', `Agent 翻译：${approxTime(agentExtra)}`, {time: approxTime(agentExtra)}), 'muted-line');
     appendTextLine(el, t('queue.generation', `图片生成：${approxTime(generation)}`, {time: approxTime(generation)}), 'muted-line');
     appendTextLine(el, t('queue.total', `预计总时间：${approxTime(total)}`, {time: approxTime(total)}));
@@ -1606,6 +1610,17 @@ async function loadMe(){
     }
     if (!me.fast_translator_enabled && !me.agent_enabled) {
       $('agentHint').textContent = t('app.translation_all_disabled', '翻译功能当前未启用');
+    }
+    // Populate translation cost labels
+    var normalCostEl = $('normalTranslatorCost');
+    if (normalCostEl) {
+      var normalCost = Number(me.normal_translator_cost_credits || me.agent_surcharge_credits || 1);
+      normalCostEl.textContent = t('app.translation_normal_cost', `额外 ${normalCost} credit`, {credits: normalCost});
+    }
+    var fastCostEl = $('fastTranslatorCost');
+    if (fastCostEl) {
+      var fastCost = Number(me.fast_translator_cost_credits || 2);
+      fastCostEl.textContent = t('app.translation_fast_cost', `额外 ${fastCost} credits`, {credits: fastCost});
     }
     startQueueStatusPolling();
 

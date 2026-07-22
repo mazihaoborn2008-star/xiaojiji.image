@@ -7,7 +7,7 @@
   <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
   <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
-  <link rel="stylesheet" href="/assets/styles.css?v=local-test-fast-ai-support-mock1">
+  <link rel="stylesheet" href="/assets/styles.css?v=phase2-translator-pricing-v1">
 </head>
 <body>
   <header class="topbar">
@@ -94,10 +94,12 @@
           <label class="check agent-check translation-option">
             <input id="agentToggle" type="checkbox">
             <span data-i18n="app.translation_normal">普通翻译</span>
+            <small id="normalTranslatorCost" class="translation-cost-hint"></small>
           </label>
           <label class="check agent-check translation-option">
             <input id="fastTranslatorToggle" type="checkbox">
             <span data-i18n="app.translation_fast">极速翻译</span>
+            <small id="fastTranslatorCost" class="translation-cost-hint"></small>
             <small data-i18n="app.translation_fast_hint">翻译效果更好，响应更快，无需等待普通翻译队列</small>
           </label>
           <span id="agentHint" class="muted"></span>
@@ -240,9 +242,9 @@
     </div>
   </div>
 
-  <script src="/assets/i18n.js?v=local-test-fast-ai-support-mock1" defer></script>
+  <script src="/assets/i18n.js?v=phase2-translator-pricing-v1" defer></script>
   <script src="/assets/copy-to-clipboard.js?v=fix-api-error-display-1" defer></script>
-  <script src="/assets/app.js?v=local-test-fast-ai-support-mock1" defer></script>
+  <script src="/assets/app.js?v=phase2-translator-pricing-v1" defer></script>
   <!-- Local test mode indicator -->
   <script>
   (function(){

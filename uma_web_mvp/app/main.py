@@ -1059,6 +1059,7 @@ def me(
         "price_fen_per_image": s.price_fen_per_image,
         "agent_enabled": s.agent_enabled,
         "agent_surcharge_credits": int(s.agent_surcharge_credits),
+        "normal_translator_cost_credits": int(s.agent_surcharge_credits),
         "app_env": s.app_env,
         "fast_translator_enabled": bool(s.fast_translator_enabled),
         "fast_translator_cost_credits": int(s.fast_translator_cost_credits),

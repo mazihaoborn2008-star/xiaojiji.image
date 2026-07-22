@@ -111,6 +111,13 @@ body.dialog-open { overflow:hidden; }
   line-height:1.35;
   margin-left:4px;
 }
+.translation-cost-hint {
+  display:inline;
+  color:#8ee3a0;
+  font-size:12px;
+  font-weight:600;
+  margin-left:6px;
+}
 .message { min-height:22px; }
 .message.error { color:var(--danger); }
 .message.ok { color:#8ee3a0; }
