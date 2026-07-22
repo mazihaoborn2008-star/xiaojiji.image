@@ -1,5 +1,6 @@
 from functools import lru_cache
 import base64
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlparse
@@ -30,7 +31,13 @@ def _is_local_origin(origin: str) -> bool:
     return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost"}
 
 
-_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_APP_ENV = os.environ.get("APP_ENV", "").strip().lower()
+if _APP_ENV == "local":
+    _candidate = _PROJECT_ROOT / ".env.local"
+    _ENV_PATH = _candidate if _candidate.is_file() else _PROJECT_ROOT / ".env"
+else:
+    _ENV_PATH = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):

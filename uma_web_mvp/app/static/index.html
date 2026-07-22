@@ -235,8 +235,19 @@
     </div>
   </div>
 
-  <script src="/assets/i18n.js?v=agent-pricing-v1" defer></script>
+  <script src="/assets/i18n.js?v=agent-pricing-v3" defer></script>
   <script src="/assets/copy-to-clipboard.js?v=fix-api-error-display-1" defer></script>
   <script src="/assets/app.js?v=character-ambiguity-resolution2" defer></script>
+  <!-- Local test mode indicator -->
+  <script>
+  (function(){
+    var isLocal = location.port === '8001' || location.hostname === 'localhost' && location.port !== '8000';
+    if (!isLocal) return;
+    var b = document.createElement('div');
+    b.textContent = '【本地测试版 / Local Test】';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#f59e0b;color:#000;text-align:center;padding:4px 0;font-size:13px;font-weight:700;letter-spacing:1px;';
+    document.body.appendChild(b);
+  })();
+  </script>
 </body>
 </html>

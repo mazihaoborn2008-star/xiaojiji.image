@@ -1,0 +1,8 @@
+# Local test environment
+.env.local
+.env.test
+test_data/
+*.db
+__pycache__/
+*.pyc
+.venv/
