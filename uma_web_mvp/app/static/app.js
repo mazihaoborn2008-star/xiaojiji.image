@@ -1932,9 +1932,16 @@ function renderCharacterResolutionDialog(resolution, submitContext) {
   if (!dialog || !intro || !groupRoot || !errorBox) return false;
 
   const mentionSummary = groups.map((group) => `“${group.rawText || ''}”`).join('、');
-  intro.textContent = groups.length === 1
-    ? t('character_resolution.intro', `“${groups[0].rawText || ''}”匹配到多个角色，请选择你想生成的人物。`, {mention: groups[0].rawText || ''})
-    : `${t('character_resolution.pick_all', '请为每个存在歧义的人物选择一个选项。')} ${mentionSummary}`;
+  const isSingleFuzzy = groups.length === 1
+    && groups[0].candidates
+    && groups[0].candidates.length === 1
+    && groups[0].matchType
+    && !['exact_zh', 'exact_en', 'tag'].includes(groups[0].matchType);
+  intro.textContent = isSingleFuzzy
+    ? t('character_resolution.fuzzy_intro', '已自动为你匹配到人物库中可能的角色，请确认：')
+    : groups.length === 1
+      ? t('character_resolution.intro', `“${groups[0].rawText || ''}”匹配到多个角色，请选择你想生成的人物。`, {mention: groups[0].rawText || ''})
+      : `${t('character_resolution.pick_all', '请为每个存在歧义的人物选择一个选项。')} ${mentionSummary}`;
   errorBox.classList.add('hidden');
   errorBox.textContent = '';
   groupRoot.textContent = '';
@@ -1947,7 +1954,11 @@ function renderCharacterResolutionDialog(resolution, submitContext) {
 
     const title = document.createElement('p');
     title.className = 'character-resolution-group-title';
-    title.textContent = t('character_resolution.intro', `“${group.rawText || ''}”匹配到多个角色，请选择你想生成的人物。`, {mention: group.rawText || ''});
+    const isGroupFuzzy = group.candidates && group.candidates.length === 1
+      && group.matchType && !['exact_zh', 'exact_en', 'tag'].includes(group.matchType);
+    title.textContent = isGroupFuzzy
+      ? t('character_resolution.fuzzy_intro', '已自动为你匹配到人物库中可能的角色，请确认：')
+      : t('character_resolution.intro', `“${group.rawText || ''}”匹配到多个角色，请选择你想生成的人物。`, {mention: group.rawText || ''});
     section.appendChild(title);
 
     const options = document.createElement('div');

@@ -29,6 +29,33 @@ from .character_index import (
 
 NO_LIBRARY_CHARACTER_ID = "__no_library_character__"
 
+# ── 匹配类型分类 ──
+
+# 精确匹配类型：单候选时可自动 resolved
+AUTO_RESOLVE_MATCH_TYPES: set[str] = {
+    "exact_zh",
+    "exact_en",
+    "tag",
+}
+
+# 非精确匹配类型：即使单候选也必须由用户确认
+CONFIRM_MATCH_TYPES: set[str] = {
+    "zh_substring",
+    "en_short",
+}
+
+
+def _requires_confirmation(match_type: str) -> bool:
+    """Return True if this match_type must always ask the user.
+
+    Known non-exact types (zh_substring, en_short) return True.
+    Unknown / future types default to True (safe side).
+    """
+    if match_type in AUTO_RESOLVE_MATCH_TYPES:
+        return False
+    return True
+
+
 
 def analyze_character_mentions(text: str) -> dict[str, Any]:
     """Return shared character resolution state for both Agent entry points.
@@ -74,7 +101,9 @@ def analyze_character_mentions(text: str) -> dict[str, Any]:
             if not _is_non_subject_character_reference(raw, c)
         ]
         candidates = [c for c in candidates if c.get("characterId")]
-        if len(candidates) >= 2:
+        is_ambiguous_group = group.get("status") == "ambiguous"
+        if is_ambiguous_group and len(candidates) >= 1:
+            # 多候选或非精确单候选 → 用户确认
             mention_id = str(group.get("group_id") or _generate_group_id())
             mentions.append({
                 "mentionId": mention_id,
@@ -84,6 +113,7 @@ def analyze_character_mentions(text: str) -> dict[str, Any]:
                 "status": "ambiguous",
                 "candidates": _dedupe_public_candidates(candidates),
                 "resolvedCharacterId": None,
+                "matchType": str(group.get("match_type") or ""),
             })
         elif len(candidates) == 1:
             cid = candidates[0].get("characterId")
@@ -338,7 +368,7 @@ def analyze_user_request(text: str) -> dict[str, Any]:
     if franchise_hints:
         mention_groups = resolve_mention_groups_with_franchise(mention_groups, franchise_hints)
 
-    # 4. 分类：resolved（1个候选）vs ambiguous（多个候选）
+    # 4. 分类：resolved（精确单候选）vs ambiguous（多候选或非精确单候选）
     resolved: list[dict[str, Any]] = []
     ambiguous_groups: list[dict[str, Any]] = []
 
@@ -349,11 +379,12 @@ def analyze_user_request(text: str) -> dict[str, Any]:
         ]
         if len(g["candidates"]) == 0:
             continue
-        if len(g["candidates"]) == 1:
-            # 唯一候选 → 自动确定
+        match_type = str(g.get("match_type") or "")
+        if len(g["candidates"]) == 1 and not _requires_confirmation(match_type):
+            # 精确匹配单候选 → 自动确定
             resolved.append(g["candidates"][0])
         else:
-            # 多候选 → 需要用户确认
+            # 多候选，或非精确匹配单候选 → 需要用户确认
             g["group_id"] = _generate_group_id()
             g["status"] = "ambiguous"
             ambiguous_groups.append(g)
@@ -367,7 +398,7 @@ def analyze_user_request(text: str) -> dict[str, Any]:
         ]
 
     # 清理空组
-    ambiguous_groups = [g for g in ambiguous_groups if len(g["candidates"]) >= 2]
+    ambiguous_groups = [g for g in ambiguous_groups if len(g["candidates"]) >= 1]
 
     is_ambiguous = len(ambiguous_groups) > 0
 
