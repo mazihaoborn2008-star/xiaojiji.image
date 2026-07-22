@@ -751,9 +751,11 @@ def admin_image_refunds_page(
 def smart_agent_page(user: UserSession | None = Depends(get_current_user_optional), s: Settings = Depends(get_settings)):
     if user is None:
         return RedirectResponse(url="/login", status_code=302)
-    if s.is_local_env() and s.ai_support_enabled:
+    if s.ai_support_enabled:
         return FileResponse(STATIC_DIR / "ai-support.html")
-    return FileResponse(STATIC_DIR / "smart-agent.html")
+    if s.smart_agent_enabled:
+        return FileResponse(STATIC_DIR / "smart-agent.html")
+    raise HTTPException(status_code=404, detail="功能未开放")
 
 
 @app.get("/smart-agent-legacy")
@@ -1061,6 +1063,7 @@ def me(
         "fast_translator_enabled": bool(s.fast_translator_enabled),
         "fast_translator_cost_credits": int(s.fast_translator_cost_credits),
         "ai_support_enabled": bool(s.ai_support_enabled),
+        "smart_agent_enabled": bool(s.smart_agent_enabled),
         "is_admin": is_admin_user(user, s),
         "email_auth_available": s.is_email_auth_available(),
         "has_email_password": has_email_password,

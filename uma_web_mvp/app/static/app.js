@@ -1576,9 +1576,18 @@ async function loadMe(){
     $('balance').textContent=credits(me.balance_fen);
     $('adminImageRefundLink')?.classList.toggle('hidden', !me.is_admin);
     const smartLink = $('smartAgentNavLink');
-    if (smartLink && me.ai_support_enabled) {
-      smartLink.dataset.i18n = 'nav.ai_support';
-      smartLink.textContent = t('nav.ai_support', 'AI 客服');
+    if (smartLink) {
+      if (me.ai_support_enabled) {
+        smartLink.dataset.i18n = 'nav.ai_support';
+        smartLink.textContent = t('nav.ai_support', 'AI 客服');
+        smartLink.classList.remove('hidden');
+      } else if (me.smart_agent_enabled) {
+        smartLink.dataset.i18n = 'nav.smart_agent';
+        smartLink.textContent = t('nav.smart_agent', '智能 Agent');
+        smartLink.classList.remove('hidden');
+      } else {
+        smartLink.classList.add('hidden');
+      }
     }
     maybeShowWelcomeBonus(me);
     startSupportAndTopupChecks();
