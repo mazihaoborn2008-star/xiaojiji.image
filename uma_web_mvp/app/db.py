@@ -650,6 +650,49 @@ def ensure_schema(settings: Settings) -> None:
         draft_columns = {row[1] for row in conn.execute("PRAGMA table_info(smart_agent_prompt_drafts)").fetchall()}
         if "structured_draft_json" not in draft_columns:
             conn.execute("ALTER TABLE smart_agent_prompt_drafts ADD COLUMN structured_draft_json TEXT DEFAULT ''")
+
+        # ── Idempotency table for smart agent task creation ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS smart_agent_request_idempotency (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                client_request_id TEXT NOT NULL,
+                request_fingerprint TEXT NOT NULL DEFAULT '',
+                task_id TEXT DEFAULT '',
+                request_status TEXT NOT NULL DEFAULT 'pending',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(user_id, client_request_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_idempotency_user "
+            "ON smart_agent_request_idempotency(user_id, created_at)"
+        )
+
+        # ── Billing events table for refund idempotency ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS smart_agent_billing_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                task_id TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL,
+                amount INTEGER NOT NULL DEFAULT 0,
+                event_key TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                metadata TEXT DEFAULT '',
+                UNIQUE(event_key)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_events_user "
+            "ON smart_agent_billing_events(user_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_events_task "
+            "ON smart_agent_billing_events(task_id)"
+        )
+
         conn.commit()
     finally:
         conn.close()
@@ -871,6 +914,124 @@ def create_task_atomic(
         conn.close()
 
 
+def _compute_request_fingerprint(
+    *,
+    user_id: str,
+    request_text: str,
+    cost_credits: int,
+    client_request_id: str | None = None,
+) -> str:
+    """Compute stable fingerprint for idempotency check.
+
+    Includes only business fields that affect task behavior.
+    Excludes timestamps, random IDs, and transient state.
+    """
+    import hashlib
+    payload = json.dumps(
+        {
+            "user_id": user_id,
+            "request_text": request_text.strip(),
+            "cost_credits": cost_credits,
+            "client_request_id": str(client_request_id or "").strip(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _check_idempotency(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    request_id: str,
+    fingerprint: str,
+) -> dict[str, Any] | None:
+    """Check idempotency table for existing record.
+
+    Returns:
+        None if no existing record.
+        {"task_id": ..., "status": "completed", "deduped": True} if same fingerprint.
+        Raises ValueError if fingerprint mismatch (conflict).
+    """
+    existing = conn.execute(
+        "SELECT task_id, request_fingerprint, request_status FROM smart_agent_request_idempotency "
+        "WHERE user_id=? AND client_request_id=?",
+        (user_id, request_id),
+    ).fetchone()
+    if not existing:
+        return None
+    if existing["request_fingerprint"] != fingerprint:
+        raise ValueError(
+            "client_request_id_conflict: "
+            "The same client_request_id was already used with different request content."
+        )
+    # Same fingerprint - return existing task
+    return {
+        "task_id": existing["task_id"] or "",
+        "status": existing["request_status"],
+        "deduped": True,
+    }
+
+
+def _insert_idempotency_record(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    request_id: str,
+    fingerprint: str,
+    now: int,
+) -> None:
+    """Insert idempotency record. Raises on UNIQUE violation."""
+    conn.execute(
+        "INSERT INTO smart_agent_request_idempotency "
+        "(user_id, client_request_id, request_fingerprint, request_status, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'pending', ?, 0)",
+        (user_id, request_id, fingerprint, now),
+    )
+
+
+def _complete_idempotency_record(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    request_id: str,
+    task_id: str,
+    now: int,
+) -> None:
+    """Update idempotency record with task_id and mark completed."""
+    conn.execute(
+        "UPDATE smart_agent_request_idempotency "
+        "SET task_id=?, request_status='completed', updated_at=? "
+        "WHERE user_id=? AND client_request_id=?",
+        (task_id, now, user_id, request_id),
+    )
+
+
+def _insert_refund_event(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    task_id: str,
+    amount: int,
+    reason: str,
+    now: int,
+) -> bool:
+    """Insert refund billing event. Returns True if inserted, False if duplicate."""
+    event_key = f"smart-agent-refund:{task_id}:{reason}"
+    try:
+        conn.execute(
+            "INSERT INTO smart_agent_billing_events "
+            "(user_id, task_id, event_type, amount, event_key, created_at) "
+            "VALUES (?, ?, 'refund', ?, ?, ?)",
+            (user_id, task_id, amount, event_key, now),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
 def create_smart_agent_task_atomic(
     settings: Settings,
     *,
@@ -892,23 +1053,76 @@ def create_smart_agent_task_atomic(
     try:
         conn.execute("BEGIN IMMEDIATE")
         request_id = str(client_request_id or "").strip()[:80] or None
+
+        # ── Idempotency check via dedicated table ──
         if request_id:
-            existing = conn.execute(
-                """
-                SELECT job_code, charged_fen, status
-                FROM generation_tasks
-                WHERE user_id=? AND client_request_id=?
-                """,
-                (user_id, request_id),
-            ).fetchone()
-            if existing:
+            fingerprint = _compute_request_fingerprint(
+                user_id=user_id,
+                request_text=request_text,
+                cost_credits=cost_credits,
+                client_request_id=request_id,
+            )
+            # Try to check existing record first
+            idem_result = _check_idempotency(
+                conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+            )
+            if idem_result:
+                # Same fingerprint, already completed → return existing
+                if idem_result.get("task_id"):
+                    existing_task = conn.execute(
+                        "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                        (idem_result["task_id"],),
+                    ).fetchone()
+                    conn.commit()
+                    return {
+                        "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                        "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                        "status": existing_task["status"] if existing_task else "queued",
+                        "deduped": True,
+                    }
+                # Pending record exists with same fingerprint → return deduped
                 conn.commit()
                 return {
-                    "job_code": existing["job_code"],
-                    "charged_fen": int(existing["charged_fen"]),
-                    "status": existing["status"],
+                    "job_code": idem_result.get("task_id") or job_code,
+                    "charged_fen": charged_fen,
+                    "status": "queued",
                     "deduped": True,
                 }
+            # No existing record → insert idempotency placeholder
+            try:
+                _insert_idempotency_record(
+                    conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint, now=now,
+                )
+            except sqlite3.IntegrityError:
+                # Concurrent insert won. Re-check.
+                conn.rollback()
+                conn = connect(settings)
+                conn.execute("BEGIN IMMEDIATE")
+                idem_result = _check_idempotency(
+                    conn, user_id=user_id, request_id=request_id, fingerprint=fingerprint,
+                )
+                if idem_result and idem_result.get("task_id"):
+                    existing_task = conn.execute(
+                        "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
+                        (idem_result["task_id"],),
+                    ).fetchone()
+                    conn.commit()
+                    return {
+                        "job_code": existing_task["job_code"] if existing_task else idem_result["task_id"],
+                        "charged_fen": int(existing_task["charged_fen"]) if existing_task else charged_fen,
+                        "status": existing_task["status"] if existing_task else "queued",
+                        "deduped": True,
+                    }
+                # Concurrent insert with same fingerprint, still pending
+                conn.commit()
+                return {
+                    "job_code": job_code,
+                    "charged_fen": charged_fen,
+                    "status": "queued",
+                    "deduped": True,
+                }
+
+        # ── Queue limits ──
         global_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
         ).fetchone()[0])
@@ -921,6 +1135,7 @@ def create_smart_agent_task_atomic(
         if user_open >= settings.max_active_tasks_per_user:
             raise RuntimeError("你当前未完成的任务太多，请等待或取消后再提交")
 
+        # ── Balance deduction (same transaction) ──
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
         cur = conn.execute(
             "UPDATE users SET balance_fen = balance_fen - ? WHERE user_id = ? AND balance_fen >= ?",
@@ -933,6 +1148,8 @@ def create_smart_agent_task_atomic(
             "VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, -charged_fen, SMART_AGENT_CHARGE_REASON, job_code, user_id, now),
         )
+
+        # ── Task creation (same transaction) ──
         conn.execute(
             """
             INSERT INTO generation_tasks(
@@ -949,6 +1166,13 @@ def create_smart_agent_task_atomic(
                 charged_fen, SMART_AGENT_STATUS, now,
             ),
         )
+
+        # ── Update idempotency record with task_id (same transaction) ──
+        if request_id:
+            _complete_idempotency_record(
+                conn, user_id=user_id, request_id=request_id, task_id=job_code, now=now,
+            )
+
         conn.commit()
         return {"job_code": job_code, "charged_fen": charged_fen, "status": SMART_AGENT_STATUS, "deduped": False}
     except Exception:
@@ -1321,6 +1545,22 @@ def fail_smart_agent_task_refund(
             conn.rollback()
             return False
         charged_fen = int(row["charged_fen"] or 0)
+
+        # ── Billing event idempotency check ──
+        refund_inserted = _insert_refund_event(
+            conn,
+            user_id=row["user_id"],
+            task_id=job_code,
+            amount=charged_fen,
+            reason=SMART_AGENT_REFUND_REASON,
+            now=now,
+        )
+        if not refund_inserted:
+            # Already refunded at ledger level
+            conn.rollback()
+            return False
+
+        # ── Update task status (conditional) ──
         cur = conn.execute(
             """
             UPDATE generation_tasks
@@ -1332,6 +1572,8 @@ def fail_smart_agent_task_refund(
         if cur.rowcount != 1:
             conn.rollback()
             return False
+
+        # ── Balance refund (same transaction) ──
         if charged_fen:
             conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (charged_fen, row["user_id"]))
             conn.execute(
