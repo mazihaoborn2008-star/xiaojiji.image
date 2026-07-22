@@ -1309,6 +1309,7 @@ def confirm_smart_agent_prompt_draft_atomic(
         ).fetchone()
         if not draft:
             raise RuntimeError("prompt_draft_not_ready")
+        draft = dict(draft)  # Convert sqlite3.Row to dict for .get() support
         if draft["generation_job_code"] and str(draft["status"] or "") == "generated":
             existing = conn.execute(
                 "SELECT job_code, charged_fen, status FROM generation_tasks WHERE job_code=?",
