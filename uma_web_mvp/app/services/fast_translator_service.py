@@ -89,13 +89,45 @@ def _safe_tags_from_model(data: dict[str, Any]) -> str:
 
 def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple[list[str], str]:
     if resolution:
-        validated = validate_character_resolution(prompt, resolution)
+        try:
+            validated = validate_character_resolution(prompt, resolution)
+        except ValueError:
+            # validate_character_resolution raises when parser finds mentions
+            # but selections don't match. Check if user provided explicit IDs
+            # and reject them as invalid.
+            selections = resolution.get("selections") or []
+            requested_ids = [
+                str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
+                for s in selections
+                if isinstance(s, dict)
+                   and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
+                   and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip() != NO_LIBRARY_CHARACTER_ID
+            ]
+            if requested_ids:
+                raise FastTranslatorError("invalid_character_resolution", "人物选择结果无效，请重新选择。")
+            raise
         ids = [
             str(item.get("characterId") or item.get("key") or "").strip()
             for item in validated.get("resolvedCharacters", []) or []
             if str(item.get("characterId") or item.get("key") or "").strip()
         ]
         skipped = list(validated.get("skippedMentions") or [])
+        # Extract requested IDs from selections to validate completeness
+        selections = resolution.get("selections") or []
+        requested_ids = [
+            str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
+            for s in selections
+            if isinstance(s, dict)
+               and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
+               and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip() != NO_LIBRARY_CHARACTER_ID
+        ]
+        requested_ids = list(dict.fromkeys(requested_ids))  # dedupe preserving order
+        if requested_ids:
+            # User explicitly selected characters — all must be valid
+            id_set = set(ids)
+            invalid = [rid for rid in requested_ids if rid not in id_set]
+            if invalid:
+                raise FastTranslatorError("invalid_character_resolution", "人物选择结果无效，请重新选择。")
         if ids:
             return list(dict.fromkeys(ids)), "resolved"
         if skipped:

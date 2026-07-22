@@ -332,7 +332,15 @@ def _apply_character_registry_to_refined_prompt(
                         insert_pos = i + 1
                 for j, tag in enumerate(additional_tags):
                     prompt_tags.insert(insert_pos + j, tag)
-                final_prompt = ", ".join(prompt_tags)
+                # Deduplicate generic tags (case-insensitive) preserving first occurrence
+                seen_tag_keys: set[str] = set()
+                deduped_tags: list[str] = []
+                for t in prompt_tags:
+                    tk = _tag_key(t)
+                    if tk not in seen_tag_keys:
+                        seen_tag_keys.add(tk)
+                        deduped_tags.append(t)
+                final_prompt = ", ".join(deduped_tags)
                 # Recalculate count tag for multiple characters
                 final_prompt = _apply_count_tags(final_prompt, characters)
         try:

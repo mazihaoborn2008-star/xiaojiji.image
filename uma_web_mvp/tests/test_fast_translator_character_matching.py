@@ -18,7 +18,7 @@ os.environ.setdefault("APP_ENV", "local")
 
 from app.config import Settings
 from app.db import connect, ensure_schema
-from app.services.fast_translator_service import _resolve_characters
+from app.services.fast_translator_service import _resolve_characters, FastTranslatorError
 from app.smart_agent.character_search import find_characters, load_characters
 from app.smart_agent.disambiguation_engine import (
     analyze_character_mentions,
@@ -226,11 +226,12 @@ class TestResolutionCharacterKeys:
         assert keys.count("silence_suzuka") == 1
 
     def test_invalid_public_id_rejected(self):
-        keys, source = _resolve_characters("初音在唱歌", {
-            "status": "resolved",
-            "selections": [{"characterId": "fake_nonexistent_id"}],
-        })
-        assert len(keys) == 0
+        """Invalid public_id must raise FastTranslatorError."""
+        with pytest.raises(FastTranslatorError):
+            _resolve_characters("初音在唱歌", {
+                "status": "resolved",
+                "selections": [{"characterId": "fake_nonexistent_id"}],
+            })
 
     def test_no_resolution_normal_flow(self):
         keys, source = _resolve_characters("无声铃鹿在赛道上", None)
