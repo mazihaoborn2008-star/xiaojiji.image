@@ -18,6 +18,23 @@ from .config import Settings
 
 MIN_ACTIVE_REMAINING_SECONDS = 3
 SMART_AGENT_CHARGE_REASON = "smart_agent_charge"
+MAX_CHARACTER_KEY_LENGTH = 1024
+
+
+def _validate_character_key(character_key: str | None) -> str:
+    """Validate character_key for database storage without truncation.
+
+    Raises ValueError if the value exceeds MAX_CHARACTER_KEY_LENGTH.
+    Returns the validated string (or empty string for None/empty).
+    """
+    key = str(character_key or "").strip()
+    if not key:
+        return ""
+    if len(key) > MAX_CHARACTER_KEY_LENGTH:
+        raise ValueError(
+            f"character_key exceeds maximum length ({MAX_CHARACTER_KEY_LENGTH})"
+        )
+    return key
 SMART_AGENT_REFUND_REASON = "smart_agent_refund"
 SMART_AGENT_UNINTENDED_REFUND_REASON = "smart_agent_unintended_generation_refund"
 SEVERE_DEFORMATION_REFUND_REASON = "severe_deformation_auto_refund"
@@ -842,7 +859,7 @@ def create_task_atomic(
                 1 if use_agent else 0, request_id, style_key, float(lora_weight), width, height,
                 mode, input_image_path, float(denoise), control_type, control_character,
                 1 if auto_tagger else 0, style_key, str(prompt_source or "")[:120],
-                str(character_key or "")[:120], str(mock_result or "")[:20], charged_fen, now,
+                _validate_character_key(character_key), str(mock_result or "")[:20], charged_fen, now,
             ),
         )
         conn.commit()
@@ -1033,7 +1050,7 @@ def create_smart_agent_queued_task_atomic(
                 "smart_agent", request_text, plan_json, None, request_id,
                 workflow_key, 1.0, int(width), int(height), "txt2img", None, 0.5, "depth",
                 "prompt", 0, workflow_key, loras_json, prompt_source[:120], charged_fen, "queued", now,
-                str(conversation_code or "")[:80], str(character_key or "")[:120],
+                str(conversation_code or "")[:80], _validate_character_key(character_key),
                 str(workflow_source or "")[:80], str(fallback_level or "")[:80],
             ),
         )
@@ -1161,7 +1178,7 @@ def confirm_smart_agent_prompt_draft_atomic(
                 None, request_id, workflow_key, 1.0, int(draft["width"] or 1024), int(draft["height"] or 1024),
                 "txt2img", None, 0.5, "depth", "prompt", 0, workflow_key, str(draft["loras_json"] or "[]"),
                 str(draft["prompt_source"] or "")[:120], charged_fen, "queued", now,
-                str(conversation_code or "")[:80], str(draft["resolved_character_key"] or "")[:120], str(draft["workflow_source"] or "")[:80],
+                str(conversation_code or "")[:80], _validate_character_key(draft.get("resolved_character_key")), str(draft["workflow_source"] or "")[:80],
                 str(draft["fallback_level"] or "")[:80],
             ),
         )
@@ -1267,7 +1284,7 @@ def complete_smart_agent_plan(
             (
                 prompt[:3000], prompt[:3000], plan_json, workflow_key, loras_json,
                 prompt_source[:120], workflow_key, int(width), int(height),
-                str(character_key or "")[:120], str(workflow_source or "")[:80], str(fallback_level or "")[:80],
+                _validate_character_key(character_key), str(workflow_source or "")[:80], str(fallback_level or "")[:80],
                 now, job_code,
             ),
         )
@@ -1604,7 +1621,7 @@ def save_smart_agent_prompt_draft(
                 int(message_id) if message_id else None,
                 prompt[:3000],
                 next_version,
-                str(character_key or "")[:120],
+                _validate_character_key(character_key),
                 now,
                 plan_json,
                 request_text[:2000],

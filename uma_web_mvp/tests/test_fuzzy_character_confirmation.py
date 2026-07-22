@@ -1397,3 +1397,164 @@ class TestDisabledStateValidation:
         with pytest.raises(SmartAgentError):
             _run_build(settings, "test", task_prompt_source="agent_no_character",
                         task_character_key='["__no_library_character__"]')
+
+
+# -- Real database write/read tests ------------------------------------
+
+import pytest as _pytest
+
+
+class TestCharacterKeyStorage:
+    """Real database write/read tests for character_key JSON format."""
+
+    @_pytest.fixture(autouse=True)
+    def setup_db(self, tmp_path):
+        from app.config import Settings
+        from app.db import ensure_schema, connect
+        test_root = tmp_path / "test_data"
+        output = test_root / "output"
+        mock_output = test_root / "mock_output"
+        input_images = test_root / "input_images"
+        for path in (output, mock_output, input_images):
+            path.mkdir(parents=True, exist_ok=True)
+        self.settings = Settings(
+            APP_ENV="local", APP_ORIGIN="http://127.0.0.1:8001",
+            BALANCE_DB=str(test_root / "test.db"),
+            BOT_OUTPUT_DIR=str(output), mock_output_dir=str(mock_output),
+            INPUT_IMAGE_DIR=str(input_images), BOT_DIR=str(test_root),
+            redis_enabled=False, dev_auth_bypass=True, dev_user_id="local-user",
+            owner_free_generation=False, deepseek_api_key="",
+        )
+        ensure_schema(self.settings)
+        conn = connect(self.settings)
+        try:
+            conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, ?)", ("u1", 10000))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _create_task(self, job_code, character_key, prompt_source="agent_character_resolved"):
+        from app.db import create_task_atomic
+        return create_task_atomic(
+            self.settings, job_code=job_code, user_id="u1", username="t",
+            prompt="p", style_key="anima", lora_weight=1.0, width=1024, height=1536,
+            mode="txt2img", input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt", auto_tagger=False,
+            use_agent=True, prompt_source=prompt_source, character_key=character_key,
+        )
+
+    def _get_ck(self, job_code):
+        from app.db import connect
+        conn = connect(self.settings)
+        try:
+            row = conn.execute("SELECT character_key FROM generation_tasks WHERE job_code=?", (job_code,)).fetchone()
+            return str(row["character_key"] or "") if row else ""
+        finally:
+            conn.close()
+
+    def test_single_roundtrip(self):
+        from app.smart_agent.planner import parse_character_ids
+        self._create_task("T001", '["kochou_shinobu"]')
+        assert self._get_ck("T001") == '["kochou_shinobu"]'
+        assert parse_character_ids(self._get_ck("T001")) == ["kochou_shinobu"]
+
+    def test_double_roundtrip(self):
+        from app.smart_agent.planner import parse_character_ids
+        self._create_task("T002", '["silence_suzuka","tokai_teio"]')
+        assert parse_character_ids(self._get_ck("T002")) == ["silence_suzuka", "tokai_teio"]
+
+    def test_triple_roundtrip(self):
+        from app.smart_agent.planner import parse_character_ids
+        self._create_task("T003", '["kochou_shinobu","hatsune_miku","rice_shower"]')
+        assert parse_character_ids(self._get_ck("T003")) == ["kochou_shinobu", "hatsune_miku", "rice_shower"]
+
+    def test_eight_over_120_stored_complete(self):
+        from app.smart_agent.planner import parse_character_ids, serialize_character_ids
+        ids = ["kochou_shinobu", "hatsune_miku", "rice_shower", "silence_suzuka",
+               "tokai_teio", "gold_city", "special_week", "kitasan_black_extra"]
+        json_key = serialize_character_ids(ids)
+        assert len(json_key) > 120
+        self._create_task("T004", json_key)
+        stored = self._get_ck("T004")
+        assert stored == json_key
+        assert parse_character_ids(stored) == ids
+
+    def test_json_loads_ok(self):
+        import json as jmod
+        self._create_task("T005", '["kochou_shinobu","hatsune_miku"]')
+        parsed = jmod.loads(self._get_ck("T005"))
+        assert isinstance(parsed, list) and len(parsed) == 2
+
+    def test_last_char_not_truncated(self):
+        from app.smart_agent.planner import parse_character_ids
+        self._create_task("T006", '["a","b","c","d","e","f","g","h"]')
+        assert parse_character_ids(self._get_ck("T006"))[-1] == "h"
+
+    def test_over_1024_fails_before_write(self):
+        import json as jmod
+        # Build a JSON array that exceeds 1024 chars with 8 valid-length IDs
+        # Each ID can be up to 80 chars; with quotes+comma overhead ~84 per entry
+        # 8 * 128 = ~1024+ in JSON format
+        ids = ["c" + str(i).zfill(79) for i in range(13)]  # 13 * ~84 = ~1092
+        long_json = jmod.dumps(ids, separators=(",", ":"))
+        assert len(long_json) > 1024
+        # This should fail at the db level (_validate_character_key)
+        with _pytest.raises(ValueError):
+            self._create_task("T007", long_json)
+
+    def test_legacy_single_roundtrip(self):
+        from app.db import connect
+        from app.smart_agent.planner import parse_character_ids
+        import time as _t
+        conn = connect(self.settings)
+        try:
+            conn.execute(
+                "INSERT INTO generation_tasks(job_code,user_id,username,prompt,style_key,"
+                "width,height,charged_fen,status,created_at,source,character_key,prompt_source)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("T008", "u1", "t", "p", "anima", 1024, 1536, 0, "done", int(_t.time()),
+                 "web", "kochou_shinobu", "agent_character_resolved"))
+            conn.commit()
+        finally:
+            conn.close()
+        assert parse_character_ids(self._get_ck("T008")) == ["kochou_shinobu"]
+
+    def test_legacy_comma_roundtrip(self):
+        from app.db import connect
+        from app.smart_agent.planner import parse_character_ids
+        import time as _t
+        conn = connect(self.settings)
+        try:
+            conn.execute(
+                "INSERT INTO generation_tasks(job_code,user_id,username,prompt,style_key,"
+                "width,height,charged_fen,status,created_at,source,character_key,prompt_source)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("T009", "u1", "t", "p", "anima", 1024, 1536, 0, "done", int(_t.time()),
+                 "web", "silence_suzuka,tokai_teio", "agent_character_resolved"))
+            conn.commit()
+        finally:
+            conn.close()
+        assert parse_character_ids(self._get_ck("T009")) == ["silence_suzuka", "tokai_teio"]
+
+    def test_corrupted_json_worker_safe_fail(self):
+        from app.db import connect
+        from app.smart_agent.planner import _classify_task_character_decision, parse_character_ids, validate_character_ids, SmartAgentError
+        import time as _t
+        conn = connect(self.settings)
+        try:
+            conn.execute(
+                "INSERT INTO generation_tasks(job_code,user_id,username,prompt,style_key,"
+                "width,height,charged_fen,status,created_at,source,character_key,prompt_source)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("T010", "u1", "t", "p", "anima", 1024, 1536, 0, "smart_planning",
+                 int(_t.time()), "web", "[corrupted", "agent_character_resolved"))
+            conn.commit()
+        finally:
+            conn.close()
+        stored = self._get_ck("T010")
+        assert _classify_task_character_decision("agent_character_resolved") == "resolved"
+        char_ids = parse_character_ids(stored)
+        assert char_ids == []
+        with _pytest.raises(SmartAgentError) as ei:
+            validate_character_ids(char_ids)
+        assert ei.value.code == "invalid_character_resolution"
