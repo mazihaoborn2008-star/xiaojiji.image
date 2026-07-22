@@ -201,6 +201,8 @@ from .smart_agent.v2_store import (
     save_message_resolution,
 )
 from .smart_agent.v2_worker import process_smart_agent_turn_v2
+from .routes.ai_support import router as ai_support_router
+from .routes.fast_translate import router as fast_translate_router
 
 app = FastAPI(title="UMA Web MVP", docs_url=None, redoc_url=None)
 settings = get_settings()
@@ -215,6 +217,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 app.include_router(auth_router)
+app.include_router(fast_translate_router)
+app.include_router(ai_support_router)
 
 
 def _smart_trace(stage: str, **fields) -> None:
@@ -518,8 +522,10 @@ def _serve_output_row(row: dict[str, Any], s: Settings, *, download_name: str | 
         path = s.resolve_output_path(row["file_path"])
     except (ValueError, FileNotFoundError):
         raise HTTPException(status_code=404, detail="图片文件不存在")
-    base = s.bot_output_dir.resolve()
-    if base not in path.parents or not path.is_file() or path.stat().st_size <= 0:
+    allowed_roots = [s.bot_output_dir.resolve()]
+    if s.is_local_env() and s.mock_worker_enabled:
+        allowed_roots.append(s.mock_output_path.resolve())
+    if not any(root in path.parents or path == root for root in allowed_roots) or not path.is_file() or path.stat().st_size <= 0:
         raise HTTPException(status_code=404, detail="图片文件不存在")
     media_type = OUTPUT_MEDIA_TYPES.get(path.suffix.lower())
     if not media_type:
@@ -591,6 +597,7 @@ async def image_refund_reviewer_loop() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     settings.validate_runtime()
+    settings.validate_local_isolation()
     ensure_schema(settings)
     settings.input_image_dir.mkdir(parents=True, exist_ok=True)
     settings.bot_output_dir.mkdir(parents=True, exist_ok=True)
@@ -741,9 +748,23 @@ def admin_image_refunds_page(
 
 
 @app.get("/smart-agent")
-def smart_agent_page(user: UserSession | None = Depends(get_current_user_optional)):
+def smart_agent_page(user: UserSession | None = Depends(get_current_user_optional), s: Settings = Depends(get_settings)):
     if user is None:
         return RedirectResponse(url="/login", status_code=302)
+    if s.is_local_env() and s.ai_support_enabled:
+        return FileResponse(STATIC_DIR / "ai-support.html")
+    return FileResponse(STATIC_DIR / "smart-agent.html")
+
+
+@app.get("/smart-agent-legacy")
+def smart_agent_legacy_page(
+    user: UserSession | None = Depends(get_current_user_optional),
+    s: Settings = Depends(get_settings),
+):
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
+    if not (s.is_local_env() and s.smart_agent_legacy_enabled and s.dev_auth_bypass):
+        raise HTTPException(status_code=404, detail="Not Found")
     return FileResponse(STATIC_DIR / "smart-agent.html")
 
 
@@ -1036,6 +1057,10 @@ def me(
         "price_fen_per_image": s.price_fen_per_image,
         "agent_enabled": s.agent_enabled,
         "agent_surcharge_credits": int(s.agent_surcharge_credits),
+        "app_env": s.app_env,
+        "fast_translator_enabled": bool(s.fast_translator_enabled),
+        "fast_translator_cost_credits": int(s.fast_translator_cost_credits),
+        "ai_support_enabled": bool(s.ai_support_enabled),
         "is_admin": is_admin_user(user, s),
         "email_auth_available": s.is_email_auth_available(),
         "has_email_password": has_email_password,
@@ -6031,6 +6056,8 @@ async def create_task(
     use_agent: bool = Form(False),
     client_request_id: str | None = Form(default=None),
     character_resolution: str | None = Form(default=None),
+    original_prompt: str | None = Form(default=None),
+    mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
     user: UserSession = Depends(get_current_user),
@@ -6075,6 +6102,11 @@ async def create_task(
         job_code = make_job_code()
         if input_image and input_image.filename:
             input_path = await _save_upload(s, input_image, job_code)
+        safe_mock_result = ""
+        if s.is_local_env() and s.dev_auth_bypass:
+            candidate = str(mock_result or "").strip().lower()
+            if candidate in {"success", "failed", "timeout"}:
+                safe_mock_result = candidate
         # Rate limit AFTER all validation succeeds - failed validations don't consume quota
         limiter.check(f"create:{user.user_id}", limit=5, window_seconds=60)
         result = create_task_atomic(
@@ -6097,6 +6129,8 @@ async def create_task(
             client_request_id=client_request_id,
             prompt_source=task_prompt_source,
             character_key=task_character_key,
+            mock_result=safe_mock_result,
+            original_prompt=(original_prompt or "").strip()[:3000] or None,
         )
         print(f"[WEB] created job={job_code} provider={user.provider} source=web")
         return result

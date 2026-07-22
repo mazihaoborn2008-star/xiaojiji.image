@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AI 客服</title>
+  <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
+  <link rel="stylesheet" href="/assets/ai-support.css?v=local-test-fast-ai-support-mock1">
+</head>
+<body>
+  <div class="support-page">
+    <header class="support-topbar">
+      <button id="backBtn" class="ghost" type="button" data-i18n="nav.back">返回</button>
+      <div class="support-title-wrap">
+        <h1 data-i18n="ai_support.title">AI 客服</h1>
+        <p data-i18n="ai_support.subtitle">可咨询网站使用、任务状态、扣费与退款记录等问题</p>
+      </div>
+      <div id="balance" class="credits">-- credits</div>
+    </header>
+
+    <div class="support-actions">
+      <button id="newConversationBtn" type="button" data-i18n="smart.new_chat">新聊天</button>
+      <button id="clearConversationBtn" type="button" data-i18n="smart.clear_memory">清空记忆</button>
+      <button id="historyBtn" type="button" data-i18n="smart.history">历史聊天</button>
+    </div>
+    <div id="historyPanel" class="history-panel hidden"></div>
+
+    <main class="support-card">
+      <div id="messages" class="messages" role="log" aria-live="polite"></div>
+      <div class="quick-questions">
+        <button type="button" data-question="如何使用极速翻译？" data-i18n="ai_support.quick_fast">如何使用极速翻译？</button>
+        <button type="button" data-question="我的任务为什么失败？" data-i18n="ai_support.quick_failed">我的任务为什么失败？</button>
+        <button type="button" data-question="如何申请畸形图退款？" data-i18n="ai_support.quick_refund">如何申请畸形图退款？</button>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="messageInput" rows="2" maxlength="2000" data-i18n-placeholder="ai_support.placeholder" placeholder="描述遇到的问题，或输入任务号 GEN-XXXXXXXXXXXX"></textarea>
+        <button id="sendBtn" type="submit" data-i18n="smart.send">发送</button>
+      </form>
+      <div id="status" class="status"></div>
+    </main>
+  </div>
+  <script src="/assets/i18n.js?v=local-test-fast-ai-support-mock1" defer></script>
+  <script src="/assets/ai-support.js?v=local-test-fast-ai-support-mock1" defer></script>
+</body>
+</html>
+

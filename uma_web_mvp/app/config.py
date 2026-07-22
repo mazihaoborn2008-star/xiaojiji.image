@@ -35,7 +35,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _APP_ENV = os.environ.get("APP_ENV", "").strip().lower()
 if _APP_ENV == "local":
     _candidate = _PROJECT_ROOT / ".env.local"
-    _ENV_PATH = _candidate if _candidate.is_file() else _PROJECT_ROOT / ".env"
+    if not _candidate.is_file():
+        raise RuntimeError("APP_ENV=local requires .env.local; refusing to fall back to production .env")
+    _ENV_PATH = _candidate
 else:
     _ENV_PATH = _PROJECT_ROOT / ".env"
 
@@ -44,6 +46,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=str(_ENV_PATH), env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "UMA Web MVP"
+    app_env: str = Field(default=_APP_ENV or "production", alias="APP_ENV")
     app_origin: str = "http://127.0.0.1:8000"
     host: str = "127.0.0.1"
     port: int = 8000
@@ -83,7 +86,10 @@ class Settings(BaseSettings):
         normalized = Path(stored_path)
         resolved = normalized.resolve() if normalized.is_absolute() else (self.bot_output_dir / normalized).resolve()
         bot_abs = self.bot_output_dir.resolve()
-        if bot_abs not in resolved.parents and resolved != bot_abs:
+        allowed_roots = [bot_abs]
+        if self.is_local_env() and self.mock_worker_enabled:
+            allowed_roots.append(self.mock_output_path.resolve())
+        if not any(root in resolved.parents or resolved == root for root in allowed_roots):
             raise ValueError("图片路径无效")
         if not resolved.is_file():
             raise FileNotFoundError("图片文件不存在")
@@ -126,6 +132,7 @@ class Settings(BaseSettings):
 
     smart_agent_enabled: bool = False
     smart_agent_v2_enabled: bool = False
+    smart_agent_legacy_enabled: bool = True
     smart_agent_cost_credits: int = 5
     agent_surcharge_credits: int = 1
     smart_agent_rate_window_seconds: int = 600
@@ -142,6 +149,15 @@ class Settings(BaseSettings):
     deepseek_chat_timeout_seconds: int = 180
     deepseek_chat_max_output_tokens: int = 4096
     deepseek_max_retries: int = 2
+    fast_translator_enabled: bool = False
+    fast_translator_cost_credits: int = 1
+    ai_support_enabled: bool = False
+    ai_support_max_history: int = 20
+    ai_support_rate_limit_per_minute: int = 10
+    mock_worker_enabled: bool = False
+    mock_worker_poll_seconds: int = 2
+    mock_generation_seconds: int = 3
+    mock_output_dir: str = "test_data/mock_output"
     smart_agent_prompt_xlsx_path: str = r"C:\Users\Administrator\Desktop\agent.xlsx"
     comfyui_workflow_dir: str = r"D:\ComfyUI-aki-v3\ComfyUI\user\default\workflows"
 
@@ -152,6 +168,38 @@ class Settings(BaseSettings):
     @property
     def comfyui_workflow_directory(self) -> Path:
         return Path(_resolve_windows_path(self.comfyui_workflow_dir))
+
+    @property
+    def mock_output_path(self) -> Path:
+        return Path(_resolve_windows_path(self.mock_output_dir))
+
+    @property
+    def project_root(self) -> Path:
+        return _PROJECT_ROOT
+
+    @property
+    def loaded_env_path(self) -> Path:
+        return _ENV_PATH
+
+    def is_local_env(self) -> bool:
+        return str(self.app_env or "").strip().lower() == "local"
+
+    def validate_local_isolation(self) -> None:
+        if not self.is_local_env():
+            return
+        test_data_root = (_PROJECT_ROOT / "test_data").resolve()
+        db_path = self.balance_db.resolve()
+        output_path = self.bot_output_dir.resolve()
+        mock_path = self.mock_output_path.resolve()
+        if test_data_root not in db_path.parents and db_path != test_data_root:
+            raise RuntimeError("APP_ENV=local requires BALANCE_DB under test_data")
+        if db_path.name.lower() == "balance.db":
+            raise RuntimeError("APP_ENV=local refuses production balance.db")
+        for label, path in (("BOT_OUTPUT_DIR", output_path), ("MOCK_OUTPUT_DIR", mock_path)):
+            if test_data_root not in path.parents and path != test_data_root:
+                raise RuntimeError(f"APP_ENV=local requires {label} under test_data")
+        if str(self.redis_url or "").endswith("/0") and self.redis_enabled:
+            raise RuntimeError("APP_ENV=local refuses Redis DB 0")
 
     email_auth_enabled: bool = False
     email_otp_secret: str = ""

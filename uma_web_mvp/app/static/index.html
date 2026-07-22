@@ -7,7 +7,7 @@
   <link rel="icon" href="/assets/branding/favicon.ico?v=mizuhara">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/branding/favicon-32x32.png?v=mizuhara">
   <link rel="apple-touch-icon" href="/assets/branding/apple-touch-icon.png?v=mizuhara">
-  <link rel="stylesheet" href="/assets/styles.css?v=character-ambiguity-resolution2">
+  <link rel="stylesheet" href="/assets/styles.css?v=local-test-fast-ai-support-mock1">
 </head>
 <body>
   <header class="topbar">
@@ -43,7 +43,7 @@
             <span data-i18n="nav.menu">菜单</span>
           </button>
           <nav id="navMenu" class="nav-menu hidden" role="menu" aria-label="Main menu">
-            <a href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
+            <a id="smartAgentNavLink" href="/smart-agent" role="menuitem" data-i18n="nav.smart_agent">智能 Agent</a>
             <a href="/profile" role="menuitem" data-i18n="nav.profile">个人中心</a>
             <a href="/image-refund" role="menuitem" data-i18n="nav.image_refund">畸形图退款</a>
             <a id="adminImageRefundLink" class="hidden" href="/admin/image-refunds" role="menuitem" data-i18n="nav.admin_image_refunds">畸形退款审核</a>
@@ -90,10 +90,15 @@
 有能力可直接使用英文关键词，出图更精准
 不使用 Agent 出图更快" data-i18n-placeholder="app.prompt_placeholder"></textarea>
         </label>
-        <div class="row">
-          <label class="check agent-check">
+        <div class="translation-options">
+          <label class="check agent-check translation-option">
             <input id="agentToggle" type="checkbox">
-            <span data-i18n="app.agent">使用 Agent 润色/翻译（额外收取 1 credit）</span>
+            <span data-i18n="app.translation_normal">普通翻译</span>
+          </label>
+          <label class="check agent-check translation-option">
+            <input id="fastTranslatorToggle" type="checkbox">
+            <span data-i18n="app.translation_fast">极速翻译</span>
+            <small data-i18n="app.translation_fast_hint">翻译效果更好，响应更快，无需等待普通翻译队列</small>
           </label>
           <span id="agentHint" class="muted"></span>
         </div>
@@ -235,9 +240,9 @@
     </div>
   </div>
 
-  <script src="/assets/i18n.js?v=agent-pricing-v3" defer></script>
+  <script src="/assets/i18n.js?v=local-test-fast-ai-support-mock1" defer></script>
   <script src="/assets/copy-to-clipboard.js?v=fix-api-error-display-1" defer></script>
-  <script src="/assets/app.js?v=character-ambiguity-resolution2" defer></script>
+  <script src="/assets/app.js?v=local-test-fast-ai-support-mock1" defer></script>
   <!-- Local test mode indicator -->
   <script>
   (function(){

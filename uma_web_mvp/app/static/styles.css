@@ -96,6 +96,21 @@ body.dialog-open { overflow:hidden; }
 .check input { width:auto; }
 .agent-check { font-weight:400; gap:8px; }
 .agent-check span { font-weight:650; }
+.translation-options { display:grid; gap:8px; }
+.translation-option {
+  align-items:flex-start;
+  padding:10px 12px;
+  border:1px solid rgba(125,211,252,.18);
+  border-radius:12px;
+  background:rgba(15,23,42,.42);
+}
+.translation-option small {
+  display:block;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.35;
+  margin-left:4px;
+}
 .message { min-height:22px; }
 .message.error { color:var(--danger); }
 .message.ok { color:#8ee3a0; }

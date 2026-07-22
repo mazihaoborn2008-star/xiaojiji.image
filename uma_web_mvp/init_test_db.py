@@ -17,6 +17,7 @@ os.environ["APP_ENV"] = "local"
 # Ensure test_data directory exists
 os.makedirs("test_data", exist_ok=True)
 os.makedirs("test_data/output", exist_ok=True)
+os.makedirs("test_data/mock_output", exist_ok=True)
 os.makedirs("test_data/input_images", exist_ok=True)
 os.makedirs("test_data/workflows", exist_ok=True)
 

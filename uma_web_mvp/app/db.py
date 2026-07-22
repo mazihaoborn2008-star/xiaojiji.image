@@ -450,6 +450,54 @@ def ensure_schema(settings: Settings) -> None:
             FOREIGN KEY(conversation_id) REFERENCES smart_agent_conversations(id)
         );
         CREATE INDEX IF NOT EXISTS idx_smart_prompt_status ON smart_agent_prompt_drafts(status, updated_at);
+
+        CREATE TABLE IF NOT EXISTS translation_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_code TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL,
+            client_request_id TEXT,
+            translation_mode TEXT NOT NULL,
+            model TEXT NOT NULL DEFAULT '',
+            character_match_source TEXT NOT NULL DEFAULT 'none',
+            character_keys_json TEXT NOT NULL DEFAULT '[]',
+            original_text TEXT NOT NULL,
+            refined_prompt TEXT,
+            charged_credits INTEGER NOT NULL DEFAULT 0,
+            ledger_id INTEGER,
+            status TEXT NOT NULL,
+            error_code TEXT DEFAULT '',
+            created_at INTEGER NOT NULL,
+            finished_at INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_translation_user_client_request
+            ON translation_requests(user_id, client_request_id)
+            WHERE client_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_translation_user_time
+            ON translation_requests(user_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS ai_support_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_code TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_support_conversations_user
+            ON ai_support_conversations(user_id, updated_at);
+        CREATE TABLE IF NOT EXISTS ai_support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            safe_content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'done',
+            referenced_job_code TEXT DEFAULT '',
+            FOREIGN KEY(conversation_id) REFERENCES ai_support_conversations(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_support_messages_conversation
+            ON ai_support_messages(conversation_id, created_at, id);
         """)
         refund_columns = {row[1] for row in conn.execute("PRAGMA table_info(image_refund_reviews)").fetchall()}
         if "manual_review_requested_at" not in refund_columns:
@@ -525,6 +573,8 @@ def ensure_schema(settings: Settings) -> None:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN comfy_submitted_at INTEGER")
         if "comfy_completed_at" not in columns:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN comfy_completed_at INTEGER")
+        if "mock_result" not in columns:
+            conn.execute("ALTER TABLE generation_tasks ADD COLUMN mock_result TEXT")
         conn.execute("UPDATE generation_tasks SET original_prompt = prompt WHERE original_prompt IS NULL")
         conn.execute("UPDATE generation_tasks SET effective_prompt = prompt WHERE effective_prompt IS NULL AND use_agent = 0")
         conn.execute(
@@ -692,7 +742,8 @@ def create_task_atomic(
     lora_weight: float, width: int, height: int, mode: str, input_image_path: str | None,
     denoise: float, control_type: str, control_character: str, auto_tagger: bool,
     use_agent: bool = False, client_request_id: str | None = None,
-    prompt_source: str = "", character_key: str = "",
+    prompt_source: str = "", character_key: str = "", mock_result: str = "",
+    original_prompt: str | None = None,
 ) -> dict[str, Any]:
     validate_task_payload(
         user_id=user_id, mode=mode, style_key=style_key, prompt=prompt, width=width, height=height,
@@ -773,15 +824,15 @@ def create_task_atomic(
                 job_code,user_id,username,channel_id,prompt,original_prompt,effective_prompt,use_agent,
                 client_request_id,style_key,lora_weight,width,height,
                 generation_mode,input_image_path,denoise,control_type,control_character,auto_tagger,
-                workflow_key,prompt_source,character_key,charged_fen,status,created_at,source
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web')
+                workflow_key,prompt_source,character_key,mock_result,charged_fen,status,created_at,source
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web')
             """,
             (
-                job_code, user_id, username[:120], None, prompt, prompt, None if use_agent else prompt,
+                job_code, user_id, username[:120], None, prompt, (original_prompt or prompt), None if use_agent else prompt,
                 1 if use_agent else 0, request_id, style_key, float(lora_weight), width, height,
                 mode, input_image_path, float(denoise), control_type, control_character,
                 1 if auto_tagger else 0, style_key, str(prompt_source or "")[:120],
-                str(character_key or "")[:120], charged_fen, now,
+                str(character_key or "")[:120], str(mock_result or "")[:20], charged_fen, now,
             ),
         )
         conn.commit()

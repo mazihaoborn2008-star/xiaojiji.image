@@ -13,7 +13,19 @@ class DeepSeekError(RuntimeError):
     pass
 
 
-async def complete_json(settings: Settings, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+async def complete_json(
+    settings: Settings,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout_seconds: int | None = None,
+    purpose: str = "smart_agent",
+    mock_response: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if mock_response is not None:
+        return dict(mock_response)
     if not settings.deepseek_api_key:
         raise DeepSeekError("smart_agent_not_configured")
     base = settings.deepseek_base_url.rstrip("/")
@@ -28,12 +40,12 @@ async def complete_json(settings: Settings, *, system_prompt: str, user_prompt: 
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
+        "temperature": float(temperature),
         "response_format": {"type": "json_object"},
-        "max_tokens": max(512, int(settings.deepseek_chat_max_output_tokens or 4096)),
+        "max_tokens": max(512, int(max_tokens or settings.deepseek_chat_max_output_tokens or 4096)),
     }
     last_error: Exception | None = None
-    timeout = max(5, int(settings.deepseek_chat_timeout_seconds or settings.deepseek_timeout_seconds))
+    timeout = max(5, int(timeout_seconds or settings.deepseek_chat_timeout_seconds or settings.deepseek_timeout_seconds))
     attempts = max(1, int(settings.deepseek_max_retries) + 1)
     for index in range(attempts):
         try:

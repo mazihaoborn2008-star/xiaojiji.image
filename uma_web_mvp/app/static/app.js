@@ -390,8 +390,21 @@ function formatDuration(seconds) {
   return `${m}分${String(s).padStart(2, '0')}秒`;
 }
 function isAgentChecked() {
+  return getTranslationMode() === 'normal';
+}
+function getTranslationMode() {
   const toggle = $('agentToggle');
-  return Boolean(me && me.agent_enabled && toggle && toggle.checked && !toggle.disabled);
+  const fast = $('fastTranslatorToggle');
+  if (me?.fast_translator_enabled && fast && fast.checked && !fast.disabled) return 'fast';
+  if (me?.agent_enabled && toggle && toggle.checked && !toggle.disabled) return 'normal';
+  return 'none';
+}
+function setTranslationMode(mode) {
+  const normal = $('agentToggle');
+  const fast = $('fastTranslatorToggle');
+  if (normal) normal.checked = mode === 'normal';
+  if (fast) fast.checked = mode === 'fast';
+  renderQueueStatus();
 }
 function isPromptEditing() {
   const promptEl = $('prompt');
@@ -1562,6 +1575,11 @@ async function loadMe(){
     $('userName').textContent=me.username;
     $('balance').textContent=credits(me.balance_fen);
     $('adminImageRefundLink')?.classList.toggle('hidden', !me.is_admin);
+    const smartLink = $('smartAgentNavLink');
+    if (smartLink && me.ai_support_enabled) {
+      smartLink.dataset.i18n = 'nav.ai_support';
+      smartLink.textContent = t('nav.ai_support', 'AI 客服');
+    }
     maybeShowWelcomeBonus(me);
     startSupportAndTopupChecks();
 
@@ -1573,6 +1591,12 @@ async function loadMe(){
       $('agentHint').textContent = t('app.agent_disabled', 'Agent 当前未启用');
       $('agentToggle').disabled = true;
       $('agentToggle').checked = false;
+    }
+    if ($('fastTranslatorToggle')) {
+      $('fastTranslatorToggle').disabled = !me.fast_translator_enabled;
+    }
+    if (!me.fast_translator_enabled && !me.agent_enabled) {
+      $('agentHint').textContent = t('app.translation_all_disabled', '翻译功能当前未启用');
     }
     startQueueStatusPolling();
 
@@ -1629,7 +1653,14 @@ $('dimensionPreset').addEventListener('change', () => {
 // Mode change
 // =====================
 $('mode').addEventListener('change', updateMode);
-$('agentToggle').addEventListener('change', renderQueueStatus);
+$('agentToggle').addEventListener('change', () => {
+  if ($('agentToggle').checked) setTranslationMode('normal');
+  else renderQueueStatus();
+});
+$('fastTranslatorToggle')?.addEventListener('change', () => {
+  if ($('fastTranslatorToggle').checked) setTranslationMode('fast');
+  else renderQueueStatus();
+});
 
 function schedulePromptDraftSave() {
   if (promptDraftSaveTimer) clearTimeout(promptDraftSaveTimer);
@@ -2055,12 +2086,48 @@ function makeClientRequestId() {
 async function doSubmit(promptText, w, h, characterResolution = null, clientRequestId = null) {
   $('submitBtn').disabled = true;
   setMessage('message', t('topup.submitting', '正在提交…'));
+  const requestId = clientRequestId || makeClientRequestId();
+  const translationMode = getTranslationMode();
+  let promptForTask = promptText;
+  let effectivePromptForPreview = translationMode === 'normal' ? null : promptText;
+  let promptSource = '';
+
+  if (translationMode === 'fast') {
+    try {
+      setMessage('message', t('app.fast_translating', '正在极速翻译…'));
+      const fastPayload = {
+        text: promptText,
+        client_request_id: requestId,
+      };
+      if (characterResolution) fastPayload.character_resolution = characterResolution;
+      const fastData = await api('/api/prompt/fast-refine', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(fastPayload),
+      });
+      promptForTask = fastData.prompt || promptText;
+      effectivePromptForPreview = promptForTask;
+      promptSource = `fast_translate:${fastData.request_code || ''}`;
+    } catch (err) {
+      const resolution = getCharacterResolutionDetail(err);
+      if (resolution && !characterResolution) {
+        const opened = renderCharacterResolutionDialog(resolution, {promptText, w, h, clientRequestId: requestId});
+        if (opened) {
+          setMessage('message', '');
+          return;
+        }
+      }
+      setMessage('message', translateApiMessage(err.message), 'error');
+      return;
+    }
+  }
 
   const fd = new FormData();
   fd.set('mode', $('mode').value);
   const selectedStyleKey = normalizeStyleKey($('styleKey').value);
   fd.set('style_key', selectedStyleKey);
-  fd.set('prompt', promptText);
+  fd.set('prompt', promptForTask);
+  if (translationMode === 'fast') fd.set('original_prompt', promptText);
   fd.set('width', String(w));
   fd.set('height', String(h));
   fd.set('lora_weight', $('loraWeight').value);
@@ -2068,8 +2135,7 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
   fd.set('control_type', $('controlType').value);
   fd.set('control_character', $('controlCharacter').value);
   fd.set('auto_tagger', $('autoTagger').checked ? 'true' : 'false');
-  fd.set('use_agent', isAgentChecked() ? 'true' : 'false');
-  const requestId = clientRequestId || makeClientRequestId();
+  fd.set('use_agent', translationMode === 'normal' ? 'true' : 'false');
   fd.set('client_request_id', requestId);
   if (characterResolution) fd.set('character_resolution', JSON.stringify(characterResolution));
   if ($('inputImage').files[0]) fd.set('input_image', $('inputImage').files[0]);
@@ -2090,8 +2156,8 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
         status: 'queued',
         prompt: promptText,
         original_prompt: promptText,
-        effective_prompt: isAgentChecked() ? null : promptText,
-        use_agent: isAgentChecked() ? 1 : 0,
+        effective_prompt: effectivePromptForPreview,
+        use_agent: translationMode === 'normal' ? 1 : 0,
         generation_mode: $('mode').value,
         style_key: selectedStyleKey,
         width: w,
@@ -2117,7 +2183,7 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
     } catch(_) {}
   } catch(err) {
     const resolution = getCharacterResolutionDetail(err);
-    if (resolution && isAgentChecked() && !characterResolution) {
+    if (resolution && translationMode === 'normal' && !characterResolution) {
       const opened = renderCharacterResolutionDialog(resolution, {promptText, w, h, clientRequestId: requestId});
       if (opened) {
         setMessage('message', '');
