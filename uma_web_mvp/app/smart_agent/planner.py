@@ -54,7 +54,14 @@ FORBIDDEN_PLAN_PATTERNS = [
 ]
 
 
-async def build_smart_agent_plan(settings: Settings, request_text: str, *, is_admin: bool = False) -> dict[str, Any]:
+async def build_smart_agent_plan(
+    settings: Settings,
+    request_text: str,
+    *,
+    is_admin: bool = False,
+    task_prompt_source: str = "",
+    task_character_key: str = "",
+) -> dict[str, Any]:
     request_text = (request_text or "").strip()
     if not request_text:
         raise SmartAgentError("请输入想生成的画面。", code="smart_agent_empty")
@@ -62,28 +69,72 @@ async def build_smart_agent_plan(settings: Settings, request_text: str, *, is_ad
         raise SmartAgentError("需求描述最多 1200 字。", code="smart_agent_too_long")
     _validate_request_policy(settings, request_text)
 
-    characters = _dedupe_character_matches(find_characters(request_text))
+    # ── Respect pre-resolved character decision from the task ──
+    # When the task was created through the web form, the user already made
+    # a character decision (exact match, "都不是", or no character found).
+    # The Worker must NOT re-run character matching and override that.
+    characters: list[dict[str, Any]] = []
     translated_character_name = ""
     original_character_name = ""
     character_tag_source = ""
-    if not characters:
-        candidate_cn = extract_possible_character_names(request_text)
-        if candidate_cn:
-            original_character_name = candidate_cn
-            translated = await translate_character_name(candidate_cn)
-            if translated and translated != candidate_cn:
-                translated_character_name = translated
-                characters = _dedupe_character_matches(find_characters(translated))
-                if characters:
-                    character_tag_source = "character_registry"
-                    for item in characters:
-                        item["character_tag_source"] = "character_registry"
-                        item["match_stage"] = "translated"
-    if not characters and translated_character_name:
-        fallback = build_agent_fallback_character(translated_character_name, original_character_name)
-        if fallback:
-            characters = [fallback]
-            character_tag_source = "agent_fallback"
+
+    if task_prompt_source == "agent_character_resolved" and task_character_key:
+        # User selected specific characters → use them directly
+        from .disambiguation_engine import characters_from_public_ids
+        char_ids = [s.strip() for s in task_character_key.split(",") if s.strip()]
+        if not char_ids:
+            # Invalid state: resolved but no character IDs → safe failure
+            raise SmartAgentError(
+                "人物选择结果无效，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        characters = characters_from_public_ids(char_ids)
+        loaded_ids = {
+            str(item.get("key") or item.get("identity_key") or "").strip()
+            for item in characters
+            if str(item.get("key") or item.get("identity_key") or "").strip()
+        }
+        missing_ids = [cid for cid in char_ids if cid not in loaded_ids]
+        if missing_ids:
+            # Some resolved IDs don't exist in the character library → safe failure
+            raise SmartAgentError(
+                "人物选择结果无效，请重新选择。",
+                code="invalid_character_resolution",
+            )
+        for item in characters:
+            item["character_tag_source"] = "character_registry"
+            item["match_stage"] = "confirmed_resolution"
+        character_tag_source = "character_registry"
+    elif task_prompt_source in {"agent_character_no_library", "agent_no_character"}:
+        # User chose "都不是" (skip library) or no character found → no library matching
+        character_tag_source = "none"
+    elif task_prompt_source == "agent_character_resolved":
+        # Invalid state: resolved but character_key is empty → safe failure
+        raise SmartAgentError(
+            "人物选择结果无效，请重新选择。",
+            code="invalid_character_resolution",
+        )
+    else:
+        # No pre-resolved decision (legacy tasks, direct prompt, etc.) → match from scratch
+        characters = _dedupe_character_matches(find_characters(request_text))
+        if not characters:
+            candidate_cn = extract_possible_character_names(request_text)
+            if candidate_cn:
+                original_character_name = candidate_cn
+                translated = await translate_character_name(candidate_cn)
+                if translated and translated != candidate_cn:
+                    translated_character_name = translated
+                    characters = _dedupe_character_matches(find_characters(translated))
+                    if characters:
+                        character_tag_source = "character_registry"
+                        for item in characters:
+                            item["character_tag_source"] = "character_registry"
+                            item["match_stage"] = "translated"
+        if not characters and translated_character_name:
+            fallback = build_agent_fallback_character(translated_character_name, original_character_name)
+            if fallback:
+                characters = [fallback]
+                character_tag_source = "agent_fallback"
     if characters:
         character_tag_source = character_tag_source or str(characters[0].get("character_tag_source") or "character_tags")
     snippets = search_prompt_snippets(request_text)

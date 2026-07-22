@@ -432,7 +432,13 @@ async def smart_agent_worker_loop() -> None:
             prompt_hash = hashlib.sha256(request_text.encode("utf-8")).hexdigest()[:12]
             print(f"[SMART_AGENT] planning job={job_code} prompt_hash={prompt_hash} prompt_len={len(request_text)}", flush=True)
             try:
-                plan = await build_smart_agent_plan(settings, request_text, is_admin=str(task.get("user_id")) == settings.owner_user_id)
+                plan = await build_smart_agent_plan(
+                    settings,
+                    request_text,
+                    is_admin=str(task.get("user_id")) == settings.owner_user_id,
+                    task_prompt_source=str(task.get("prompt_source") or ""),
+                    task_character_key=str(task.get("character_key") or ""),
+                )
                 ok = await asyncio.to_thread(
                     complete_smart_agent_plan,
                     settings,

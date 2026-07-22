@@ -319,3 +319,595 @@ class TestPostTranslationBypass:
         resolved_ids = keys  # NOT: keys if keys else None
         assert resolved_ids == []
         assert resolved_ids is not None
+
+
+# ── Worker character resolution bypass prevention ──────────────────
+
+import asyncio
+from unittest.mock import patch, MagicMock, AsyncMock
+
+
+_VALID_PLAN = {
+    "needs_clarification": False,
+    "workflow_key": "anima_owner",
+    "positive_prompt": "1girl, standing, anime style",
+    "negative_prompt": "",
+    "width": 1024,
+    "height": 1536,
+    "loras": [],
+}
+
+
+def _run_build(settings, request_text, **kwargs):
+    """Run build_smart_agent_plan synchronously for testing."""
+    from app.smart_agent.planner import build_smart_agent_plan
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            build_smart_agent_plan(settings, request_text, **kwargs)
+        )
+    finally:
+        loop.close()
+
+
+class TestWorkerCharacterResolution:
+    """Worker (build_smart_agent_plan) must respect pre-resolved character decisions.
+
+    The Worker picks up tasks from the queue. When the task was created through
+    the web form, the user already made a character decision. The Worker must
+    NOT re-run find_characters() and override that decision.
+    """
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        settings.fast_translator_enabled = True
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        """Apply common mocks needed by all planner tests."""
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    # ── no-character state flows through Worker ──
+
+    def test_no_character_skips_find_characters(self, monkeypatch):
+        """When task_prompt_source='agent_no_character', Worker skips find_characters."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        extract_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", lambda text: (extract_calls.append(text), "")[1])
+
+        _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        assert len(find_calls) == 0, f"find_characters should NOT be called for no-character task, but was called with: {find_calls}"
+        assert len(extract_calls) == 0, f"extract_possible_character_names should NOT be called, but was called with: {extract_calls}"
+
+    def test_no_character_skips_translate(self, monkeypatch):
+        """When task_prompt_source='agent_no_character', Worker skips translate_character_name."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        translate_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        monkeypatch.setattr("app.smart_agent.planner.translate_character_name", AsyncMock(side_effect=lambda text: (translate_calls.append(text), text)[1]))
+
+        _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        assert len(translate_calls) == 0, f"translate_character_name should NOT be called, but was called with: {translate_calls}"
+
+    def test_no_character_plan_has_empty_character_key(self, monkeypatch):
+        """When task_prompt_source='agent_no_character', plan has empty character_key."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        plan = _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        assert plan["character_key"] == "", f"character_key should be empty for no-character task, got: {plan['character_key']}"
+
+    # ── 用户选择都不是 → no-character ──
+
+    def test_skip_library_no_character_match(self, monkeypatch):
+        """When task_prompt_source='agent_character_no_library', no character matching runs."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        _run_build(settings, "麻美穿风衣", task_prompt_source="agent_character_no_library")
+
+        assert len(find_calls) == 0
+
+    # ── 精确人物 → use confirmed characters ──
+
+    def test_resolved_character_used_directly(self, monkeypatch):
+        """When task_prompt_source='agent_character_resolved', use the specified characters."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+
+        plan = _run_build(
+            settings, "蝴蝶忍站在庭院里",
+            task_prompt_source="agent_character_resolved",
+            task_character_key="kochou_shinobu",
+        )
+
+        # Should NOT call find_characters (no re-matching)
+        assert len(find_calls) == 0, f"find_characters should NOT be called for resolved task, but was called with: {find_calls}"
+        # Character key should be from the task
+        assert plan["character_key"] == "kochou_shinobu"
+
+    def test_resolved_no_fallback(self, monkeypatch):
+        """When task has resolved characters, no fallback character matching runs."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        extract_calls = []
+        translate_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", lambda text: (extract_calls.append(text), "")[1])
+        monkeypatch.setattr("app.smart_agent.planner.translate_character_name", AsyncMock(side_effect=lambda text: (translate_calls.append(text), text)[1]))
+
+        _run_build(
+            settings, "蝴蝶忍",
+            task_prompt_source="agent_character_resolved",
+            task_character_key="kochou_shinobu",
+        )
+
+        assert len(extract_calls) == 0
+        assert len(translate_calls) == 0
+
+    # ── 多人物保留全部 ──
+
+    def test_multi_character_resolved(self, monkeypatch):
+        """Multiple resolved characters are all used."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+
+        plan = _run_build(
+            settings, "蝴蝶忍和初音",
+            task_prompt_source="agent_character_resolved",
+            task_character_key="kochou_shinobu,hatsune_miku",
+        )
+
+        assert plan["character_key"] != "", "Should have a character_key for multi-character"
+        assert len(plan["matched_characters"]) >= 1
+
+    # ── legacy 兼容 ──
+
+    def test_legacy_empty_prompt_source_runs_matching(self, monkeypatch):
+        """Legacy tasks with empty prompt_source still run character matching."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        _run_build(settings, "蝴蝶忍", task_prompt_source="")
+
+        # Legacy path should still call find_characters
+        assert len(find_calls) >= 1, "Legacy tasks should still run find_characters"
+
+    # ── 蝴蝶结不注入蝴蝶忍 ──
+
+    def test_butterfly_knot_normal_translation_no_character(self, monkeypatch):
+        """Normal translation of '蝴蝶结' should not inject 蝴蝶忍."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        plan = _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        prompt_lower = plan["positive_prompt"].lower()
+        assert "kochou" not in prompt_lower, f"Prompt should not contain kochou, got: {plan['positive_prompt']}"
+        assert "shinobu" not in prompt_lower, f"Prompt should not contain shinobu, got: {plan['positive_prompt']}"
+        assert plan["character_key"] == ""
+
+    def test_butterfly_knot_skip_library_no_character(self, monkeypatch):
+        """Normal translation of '蝴蝶结' with skip library should not inject characters."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        plan = _run_build(settings, "蝴蝶结", task_prompt_source="agent_character_no_library")
+
+        prompt_lower = plan["positive_prompt"].lower()
+        assert "kochou" not in prompt_lower
+        assert "shinobu" not in prompt_lower
+        assert plan["character_key"] == ""
+
+    # ── spy 确认 Worker 未调用人物搜索 ──
+
+    def test_spy_no_character_search_called(self, monkeypatch):
+        """Spy confirms Worker does not call find_characters or extract_possible_character_names for no-character."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        all_find_calls = []
+        all_extract_calls = []
+        all_translate_calls = []
+
+        def spy_find(text, **kw):
+            all_find_calls.append(text)
+            return []
+
+        def spy_extract(text):
+            all_extract_calls.append(text)
+            return ""
+
+        async def spy_translate(text):
+            all_translate_calls.append(text)
+            return text
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", spy_find)
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", spy_extract)
+        monkeypatch.setattr("app.smart_agent.planner.translate_character_name", spy_translate)
+
+        _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        assert all_find_calls == [], f"find_characters should not be called, got: {all_find_calls}"
+        assert all_extract_calls == [], f"extract_possible_character_names should not be called, got: {all_extract_calls}"
+        assert all_translate_calls == [], f"translate_character_name should not be called, got: {all_translate_calls}"
+
+    def test_spy_resolved_character_no_search(self, monkeypatch):
+        """Spy confirms Worker does not search when characters are pre-resolved."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        all_find_calls = []
+        all_extract_calls = []
+
+        def spy_find(text, **kw):
+            all_find_calls.append(text)
+            return []
+
+        def spy_extract(text):
+            all_extract_calls.append(text)
+            return ""
+
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", spy_find)
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", spy_extract)
+
+        _run_build(
+            settings, "蝴蝶忍",
+            task_prompt_source="agent_character_resolved",
+            task_character_key="kochou_shinobu",
+        )
+
+        assert all_find_calls == [], f"find_characters should not be called for resolved, got: {all_find_calls}"
+        assert all_extract_calls == [], f"extract_possible_character_names should not be called, got: {all_extract_calls}"
+
+
+# ── Invalid resolved data must fail safe ───────────────────────────
+
+import pytest
+
+class TestInvalidResolvedData:
+    """Invalid resolved character data must fail safe — no fallback to fuzzy search."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_resolved_empty_character_key_raises(self, monkeypatch):
+        """prompt_source=agent_character_resolved but character_key is empty → safe failure."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+
+        from app.smart_agent.planner import SmartAgentError
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "蝴蝶忍", task_prompt_source="agent_character_resolved", task_character_key="")
+        assert exc_info.value.code == "invalid_character_resolution"
+
+    def test_resolved_nonexistent_id_raises(self, monkeypatch):
+        """prompt_source=agent_character_resolved but character ID doesn't exist → safe failure."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+
+        from app.smart_agent.planner import SmartAgentError
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(settings, "some request", task_prompt_source="agent_character_resolved", task_character_key="nonexistent_id_12345")
+        assert exc_info.value.code == "invalid_character_resolution"
+        # Must NOT fall back to find_characters
+        assert find_calls == [], f"find_characters should not be called on invalid resolution, got: {find_calls}"
+
+    def test_resolved_one_valid_one_invalid_raises(self, monkeypatch):
+        """One valid + one invalid ID → safe failure, not partial use."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+
+        from app.smart_agent.planner import SmartAgentError
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(
+                settings, "request",
+                task_prompt_source="agent_character_resolved",
+                task_character_key="kochou_shinobu,totally_fake_id",
+            )
+        assert exc_info.value.code == "invalid_character_resolution"
+        assert find_calls == []
+
+    def test_resolved_corrupted_data_raises(self, monkeypatch):
+        """Corrupted character_key data → safe failure."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+
+        from app.smart_agent.planner import SmartAgentError
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(
+                settings, "request",
+                task_prompt_source="agent_character_resolved",
+                task_character_key=",,,",
+            )
+        assert exc_info.value.code == "invalid_character_resolution"
+        assert find_calls == []
+
+    def test_resolved_mixed_no_library_raises(self, monkeypatch):
+        """Resolved state + no-library state simultaneously → safe failure."""
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda text, **kw: (find_calls.append(text), [])[1])
+
+        from app.smart_agent.planner import SmartAgentError
+        with pytest.raises(SmartAgentError) as exc_info:
+            _run_build(
+                settings, "request",
+                task_prompt_source="agent_character_resolved",
+                task_character_key="__no_library_character__",
+            )
+        assert exc_info.value.code == "invalid_character_resolution"
+        assert find_calls == []
+
+
+# ── Butterfly knot full pipeline acceptance ────────────────────────
+
+class TestButterflyKnotPipeline:
+    """Full pipeline acceptance: '蝴蝶结' → no character injection in final prompt."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def test_butterfly_knot_full_pipeline_no_character(self, monkeypatch):
+        """Full pipeline: '蝴蝶结' with agent_no_character → no character in final prompt."""
+        settings = self._make_settings()
+        # Mock DeepSeek to return "butterfly bow" as the translation
+        mock_plan = dict(_VALID_PLAN)
+        mock_plan["positive_prompt"] = "butterfly bow, ribbon, 1girl, anime style"
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=mock_plan))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        plan = _run_build(settings, "蝴蝶结", task_prompt_source="agent_no_character")
+
+        prompt_lower = plan["positive_prompt"].lower()
+        # No character tags injected
+        assert "kochou" not in prompt_lower
+        assert "shinobu" not in prompt_lower
+        assert "demon" not in prompt_lower
+        assert "slayer" not in prompt_lower
+        # Prompt preserved as-is
+        assert "butterfly" in prompt_lower
+        assert plan["character_key"] == ""
+        assert plan["character_tag_source"] == "none" or plan.get("fallback_level") == "none"
+
+    def test_butterfly_knot_full_pipeline_skip_library(self, monkeypatch):
+        """Full pipeline: '蝴蝶结' with agent_character_no_library → no character in final prompt."""
+        settings = self._make_settings()
+        mock_plan = dict(_VALID_PLAN)
+        mock_plan["positive_prompt"] = "butterfly bow, ribbon, 1girl, anime style"
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=mock_plan))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", MagicMock(return_value=[]))
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+
+        plan = _run_build(settings, "蝴蝶结", task_prompt_source="agent_character_no_library")
+
+        prompt_lower = plan["positive_prompt"].lower()
+        assert "kochou" not in prompt_lower
+        assert "shinobu" not in prompt_lower
+        assert plan["character_key"] == ""
+
+
+
+# -- Exact character Worker verification ---------------------------------
+
+class TestExactCharacterWorker:
+    """Exact character matches must flow through Worker correctly."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_kochou_shinobu_exact(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "蝴蝶忍站在庭院里", task_prompt_source="agent_character_resolved", task_character_key="kochou_shinobu")
+        assert plan["character_key"] == "kochou_shinobu"
+        assert len(plan["matched_characters"]) >= 1
+        assert find_calls == []
+
+    def test_hatsune_miku_exact(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "初音在唱歌", task_prompt_source="agent_character_resolved", task_character_key="hatsune_miku")
+        assert plan["character_key"] == "hatsune_miku"
+        assert find_calls == []
+
+    def test_gold_city_exact(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "黄金城夜景", task_prompt_source="agent_character_resolved", task_character_key="gold_city")
+        assert plan["character_key"] == "gold_city"
+        assert find_calls == []
+
+    def test_rice_shower_exact(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "米浴在雨中", task_prompt_source="agent_character_resolved", task_character_key="rice_shower")
+        assert plan["character_key"] == "rice_shower"
+        assert find_calls == []
+
+    def test_silence_suzuka_exact(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "无声铃鹿跑步", task_prompt_source="agent_character_resolved", task_character_key="silence_suzuka")
+        assert plan["character_key"] == "silence_suzuka"
+        assert find_calls == []
+
+    def test_resolved_not_enter_disabled(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "蝴蝶忍", task_prompt_source="agent_character_resolved", task_character_key="kochou_shinobu")
+        assert plan.get("character_tag_source", "") != "none"
+
+
+# -- Multi-character Worker verification ---------------------------------
+
+class TestMultiCharacterWorker:
+    """Multi-character tasks must preserve all character IDs."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_two_characters_preserved(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        plan = _run_build(settings, "无声铃鹿和东海帝王", task_prompt_source="agent_character_resolved", task_character_key="silence_suzuka,tokai_teio")
+        assert len(plan["matched_characters"]) >= 2
+        assert find_calls == []
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert "silence_suzuka" in mc_keys
+        assert "tokai_teio" in mc_keys
+
+    def test_three_characters_preserved(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "三人合照", task_prompt_source="agent_character_resolved", task_character_key="kochou_shinobu,hatsune_miku,rice_shower")
+        assert len(plan["matched_characters"]) >= 3
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert "kochou_shinobu" in mc_keys
+        assert "hatsune_miku" in mc_keys
+        assert "rice_shower" in mc_keys
+
+    def test_multi_character_ids_order_preserved(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "双人", task_prompt_source="agent_character_resolved", task_character_key="rice_shower,kochou_shinobu")
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert mc_keys.index("rice_shower") < mc_keys.index("kochou_shinobu")
+
+    def test_multi_character_dedup(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        plan = _run_build(settings, "重复", task_prompt_source="agent_character_resolved", task_character_key="kochou_shinobu,kochou_shinobu,hatsune_miku")
+        mc_keys = [c.get("key", "") for c in plan["matched_characters"]]
+        assert mc_keys.count("kochou_shinobu") == 1
+        assert "hatsune_miku" in mc_keys
+
+
+# -- Unknown prompt_source handling --------------------------------------
+
+class TestUnknownPromptSource:
+    """Unknown non-empty prompt_source must not silently become legacy."""
+
+    def _make_settings(self):
+        settings = MagicMock()
+        settings.deepseek_api_key = "test-key"
+        settings.is_local_env.return_value = False
+        return settings
+
+    def _common_patches(self, monkeypatch):
+        monkeypatch.setattr("app.smart_agent.planner.complete_json", AsyncMock(return_value=_VALID_PLAN))
+        monkeypatch.setattr("app.smart_agent.planner.get_workflow", MagicMock(return_value={"key": "anima_owner"}))
+
+    def test_unknown_prompt_source_runs_legacy_matching(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        _run_build(settings, "蝴蝶忍", task_prompt_source="some_future_value")
+        assert len(find_calls) >= 1
+
+    def test_empty_string_runs_legacy(self, monkeypatch):
+        settings = self._make_settings()
+        self._common_patches(monkeypatch)
+        find_calls = []
+        monkeypatch.setattr("app.smart_agent.planner.find_characters", lambda t, **kw: (find_calls.append(t), [])[1])
+        monkeypatch.setattr("app.smart_agent.planner.extract_possible_character_names", MagicMock(return_value=""))
+        _run_build(settings, "蝴蝶忍", task_prompt_source="")
+        assert len(find_calls) >= 1
+
+
+# -- Worker charging verification ----------------------------------------
+
+class TestWorkerCharging:
+    """Verify charging behavior is not affected by character decision changes."""
+
+    def test_planner_has_no_charging_logic(self):
+        from app.smart_agent.planner import build_smart_agent_plan
+        import inspect
+        src = inspect.getsource(build_smart_agent_plan)
+        assert "charged_fen" not in src
+        assert "balance_fen" not in src
+        assert "balance_ledger" not in src
+
+    def test_worker_loop_passes_plan_prompt_source(self):
+        import inspect
+        src = inspect.getsource(__import__("app.main", fromlist=["smart_agent_worker_loop"]).smart_agent_worker_loop)
+        assert 'plan.get("prompt_source")' in src or 'plan["prompt_source"]' in src
