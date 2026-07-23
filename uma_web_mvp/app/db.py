@@ -111,6 +111,9 @@ def ensure_schema(settings: Settings) -> None:
             comfy_queue_number INTEGER,
             comfy_submitted_at INTEGER,
             comfy_completed_at INTEGER,
+            translation_mode TEXT NOT NULL DEFAULT 'none',
+            fast_translation_request_code TEXT NOT NULL DEFAULT '',
+            request_fingerprint TEXT NOT NULL DEFAULT '',
             source TEXT NOT NULL DEFAULT 'discord'
         );
         CREATE TABLE IF NOT EXISTS balance_ledger (
@@ -483,6 +486,9 @@ def ensure_schema(settings: Settings) -> None:
             ledger_id INTEGER,
             status TEXT NOT NULL,
             error_code TEXT DEFAULT '',
+            started_at INTEGER,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            generation_job_code TEXT DEFAULT '',
             created_at INTEGER NOT NULL,
             finished_at INTEGER
         );
@@ -592,11 +598,25 @@ def ensure_schema(settings: Settings) -> None:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN comfy_completed_at INTEGER")
         if "mock_result" not in columns:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN mock_result TEXT")
+        if "translation_mode" not in columns:
+            conn.execute("ALTER TABLE generation_tasks ADD COLUMN translation_mode TEXT NOT NULL DEFAULT 'none'")
+        if "fast_translation_request_code" not in columns:
+            conn.execute("ALTER TABLE generation_tasks ADD COLUMN fast_translation_request_code TEXT NOT NULL DEFAULT ''")
+        if "request_fingerprint" not in columns:
+            conn.execute("ALTER TABLE generation_tasks ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''")
         conn.execute("UPDATE generation_tasks SET original_prompt = prompt WHERE original_prompt IS NULL")
         conn.execute("UPDATE generation_tasks SET effective_prompt = prompt WHERE effective_prompt IS NULL AND use_agent = 0")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_user_client_request "
             "ON generation_tasks(user_id, client_request_id) WHERE client_request_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_fast_translation_request "
+            "ON generation_tasks(fast_translation_request_code) WHERE fast_translation_request_code <> ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_generation_request_fingerprint "
+            "ON generation_tasks(user_id, request_fingerprint) WHERE request_fingerprint <> ''"
         )
         account_columns = {row[1] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
         if "last_login_at" not in account_columns:
@@ -655,6 +675,12 @@ def ensure_schema(settings: Settings) -> None:
         tr_columns = {row[1] for row in conn.execute("PRAGMA table_info(translation_requests)").fetchall()}
         if "request_fingerprint" not in tr_columns:
             conn.execute("ALTER TABLE translation_requests ADD COLUMN request_fingerprint TEXT DEFAULT ''")
+        if "started_at" not in tr_columns:
+            conn.execute("ALTER TABLE translation_requests ADD COLUMN started_at INTEGER")
+        if "attempt_count" not in tr_columns:
+            conn.execute("ALTER TABLE translation_requests ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0")
+        if "generation_job_code" not in tr_columns:
+            conn.execute("ALTER TABLE translation_requests ADD COLUMN generation_job_code TEXT DEFAULT ''")
 
         # ── Idempotency table for smart agent task creation ──
         conn.execute("""
@@ -759,6 +785,11 @@ def validate_task_payload(
 def make_job_code() -> str:
     alphabet = string.ascii_uppercase + string.digits
     return "GEN-" + "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+def make_translation_code() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "TR-" + "".join(secrets.choice(alphabet) for _ in range(12))
 
 
 def get_me(settings: Settings, user_id: str) -> dict[str, Any]:
@@ -938,6 +969,446 @@ def create_task_atomic(
         )
         conn.commit()
         return {"job_code": job_code, "charged_fen": charged_fen, "status": "queued", "deduped": False}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _compute_fast_translation_fingerprint(
+    *,
+    user_id: str,
+    text: str,
+    character_keys: list[str],
+    source: str,
+) -> str:
+    """Compute stable SHA-256 fingerprint for fast translation request.
+
+    Covers only fields that affect the final translation result.
+    """
+    normalized_keys = sorted(set(k for k in character_keys if k))
+    mode = "characters" if normalized_keys else "none"
+    payload = {
+        "user_id": user_id,
+        "text": text,
+        "mode": mode,
+        "character_keys": normalized_keys,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_generation_fingerprint(
+    *,
+    user_id: str,
+    original_prompt: str,
+    translation_mode: str,
+    character_keys: list[str] | None,
+    character_resolution_decision: str,
+    style_key: str,
+    width: int,
+    height: int,
+    lora_weight: float,
+    mode: str,
+    denoise: float,
+    control_type: str,
+    control_character: str,
+    auto_tagger: bool,
+    workflow_key: str,
+    input_image_stable_id: str = "",
+) -> str:
+    """Compute stable fingerprint for generation task idempotency.
+
+    Covers all fields that affect task behavior.
+    Excludes client_request_id, job_code, timestamps, random values.
+    """
+    normalized_chars = sorted(set(k for k in (character_keys or []) if k))
+    payload = json.dumps(
+        {
+            "user_id": user_id,
+            "original_prompt": original_prompt.strip(),
+            "translation_mode": translation_mode.strip(),
+            "character_keys": normalized_chars,
+            "character_resolution_decision": character_resolution_decision.strip(),
+            "style_key": style_key.strip(),
+            "width": width,
+            "height": height,
+            "lora_weight": lora_weight,
+            "mode": mode.strip(),
+            "denoise": denoise,
+            "control_type": control_type.strip(),
+            "control_character": control_character.strip(),
+            "auto_tagger": auto_tagger,
+            "workflow_key": workflow_key.strip(),
+            "input_image_stable_id": input_image_stable_id.strip(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def create_fast_translation_task_atomic(
+    settings: Settings,
+    *,
+    job_code: str,
+    user_id: str,
+    username: str,
+    original_prompt: str,
+    translation_mode: str,
+    style_key: str,
+    lora_weight: float,
+    width: int,
+    height: int,
+    mode: str,
+    input_image_path: str | None,
+    denoise: float,
+    control_type: str,
+    control_character: str,
+    auto_tagger: bool,
+    character_keys: list[str] | None = None,
+    character_resolution_decision: str = "none",
+    client_request_id: str | None = None,
+    mock_result: str = "",
+    workflow_key: str = "",
+) -> dict[str, Any]:
+    """Atomically create a fast translation task.
+
+    Single transaction:
+    1. Idempotency check
+    2. Active task limit (10)
+    3. 20/60 submission rate limit
+    4. Global queue limit
+    5. Calculate server-authoritative fees
+    6. Check total balance
+    7. Deduct total fees
+    8. Write ledger entries
+    9. Create translation_request (status=queued)
+    10. Create generation_task (status=translating)
+    11. Return job_code immediately
+    """
+    clean_mock = str(mock_result or "").strip().lower()
+    if clean_mock:
+        if not (settings.is_local_env() and settings.mock_worker_enabled):
+            raise RuntimeError("mock_result is only allowed in local test environment")
+        if clean_mock not in _ALLOWED_MOCK_RESULTS:
+            raise RuntimeError(f"invalid mock_result: {clean_mock}")
+        mock_result = clean_mock
+
+    raw = str(original_prompt or "").strip()
+    if not raw:
+        raise ValueError("prompt_required")
+    if len(raw) > 3000:
+        raise ValueError("prompt_too_long")
+    if any(ord(ch) < 32 and ch not in "\n\r\t" for ch in raw):
+        raise ValueError("prompt_contains_invalid_characters")
+
+    validate_task_payload(
+        user_id=user_id, mode=mode, style_key=style_key, prompt=raw, width=width, height=height,
+        denoise=denoise, control_type=control_type, control_character=control_character,
+        has_input=bool(input_image_path), owner_user_id=settings.owner_user_id,
+    )
+
+    now = int(time.time())
+    request_id = str(client_request_id or "").strip()[:80] or None
+    resolved_chars = sorted(set(k for k in (character_keys or []) if k))
+    request_code = make_translation_code()
+
+    # Server-authoritative fee calculation
+    is_owner = settings.owner_free_generation and user_id == settings.owner_user_id
+    cost_multiplier = 2 if style_key == "anima_owner" else 1
+    base_cost = int(settings.price_fen_per_image) * cost_multiplier
+    fast_translate_cost = max(0, int(settings.fast_translator_cost_credits))
+    total_charge = (base_cost + fast_translate_cost) if not is_owner else 0
+
+    fingerprint = compute_generation_fingerprint(
+        user_id=user_id,
+        original_prompt=raw,
+        translation_mode="fast",
+        character_keys=resolved_chars,
+        character_resolution_decision=character_resolution_decision,
+        style_key=style_key,
+        width=width,
+        height=height,
+        lora_weight=lora_weight,
+        mode=mode,
+        denoise=denoise,
+        control_type=control_type,
+        control_character=control_character,
+        auto_tagger=auto_tagger,
+        workflow_key=workflow_key or style_key,
+        input_image_stable_id=str(input_image_path or ""),
+    )
+
+    conn = connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        # 1. Idempotency check
+        if request_id:
+            existing = conn.execute(
+                "SELECT job_code, charged_fen, status, request_fingerprint "
+                "FROM generation_tasks WHERE user_id=? AND client_request_id=?",
+                (user_id, request_id),
+            ).fetchone()
+            if existing:
+                existing_fp = str(dict(existing).get("request_fingerprint") or "")
+                if existing_fp and existing_fp != fingerprint:
+                    conn.rollback()
+                    raise ValueError("client_request_id_conflict")
+                if not existing_fp:
+                    # Legacy row: cannot safely compare, treat as conflict
+                    conn.rollback()
+                    raise ValueError("client_request_id_conflict")
+                conn.commit()
+                return {
+                    "job_code": existing["job_code"],
+                    "charged_fen": int(existing["charged_fen"]),
+                    "status": existing["status"],
+                    "deduped": True,
+                }
+
+        # 2. Active task limit
+        ACTIVE_STATUSES = "'smart_planning','translating','queued','processing'"
+        user_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES})",
+            (user_id,),
+        ).fetchone()[0])
+        if user_open >= settings.max_active_tasks_per_user:
+            conn.rollback()
+            raise RuntimeError("active_task_limit")
+
+        # 3. 20/60 rate limit (DB-authoritative)
+        window = max(1, int(settings.generation_submit_window_seconds or 60))
+        limit = max(1, int(settings.generation_submit_user_limit or 20))
+        cutoff = now - window
+        recent_count = int(conn.execute(
+            "SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND created_at>=?",
+            (user_id, cutoff),
+        ).fetchone()[0])
+        if recent_count >= limit:
+            conn.rollback()
+            raise RuntimeError("generation_rate_limited")
+
+        # 4. Global queue limit
+        global_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES})"
+        ).fetchone()[0])
+        if global_open >= settings.max_queue_size:
+            conn.rollback()
+            raise RuntimeError("queue_full")
+
+        # 5-6. Balance check
+        conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
+        if total_charge:
+            balance_row = conn.execute(
+                "SELECT balance_fen FROM users WHERE user_id=?", (user_id,),
+            ).fetchone()
+            if not balance_row or int(balance_row[0]) < total_charge:
+                conn.rollback()
+                raise RuntimeError("insufficient_credits")
+
+            # 7. Deduct total
+            cur = conn.execute(
+                "UPDATE users SET balance_fen=balance_fen-? WHERE user_id=? AND balance_fen>=?",
+                (total_charge, user_id, total_charge),
+            )
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise RuntimeError("insufficient_credits")
+
+            # 8. Ledger entries
+            if base_cost:
+                conn.execute(
+                    "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                    "VALUES (?,?,'generate_charge',?,?,?)",
+                    (user_id, -base_cost, job_code, user_id, now),
+                )
+            if fast_translate_cost:
+                conn.execute(
+                    "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                    "VALUES (?,?,'fast_translate_charge',?,?,?)",
+                    (user_id, -fast_translate_cost, request_code, user_id, now),
+                )
+
+        # 9. Create translation_request
+        tr_fingerprint = _compute_fast_translation_fingerprint(
+            user_id=user_id,
+            text=raw,
+            character_keys=resolved_chars,
+            source=character_resolution_decision,
+        )
+        conn.execute(
+            """INSERT INTO translation_requests(
+                request_code,user_id,client_request_id,translation_mode,model,
+                character_match_source,character_keys_json,original_text,
+                charged_credits,status,created_at,request_fingerprint,generation_job_code
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                request_code, user_id, request_id, "fast", settings.deepseek_model,
+                character_resolution_decision,
+                json.dumps(resolved_chars, ensure_ascii=False),
+                raw, fast_translate_cost, "queued", now, tr_fingerprint, job_code,
+            ),
+        )
+
+        # 10. Save user settings
+        conn.execute(
+            """INSERT INTO user_settings(user_id, style_key, lora_weight, last_width, last_height, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                style_key=excluded.style_key,
+                lora_weight=excluded.lora_weight,
+                last_width=excluded.last_width,
+                last_height=excluded.last_height,
+                updated_at=excluded.updated_at""",
+            (user_id, style_key, float(lora_weight), width, height, now),
+        )
+
+        # 11. Create generation_task (status=translating)
+        conn.execute(
+            """INSERT INTO generation_tasks(
+                job_code,user_id,username,channel_id,prompt,original_prompt,effective_prompt,
+                use_agent,client_request_id,style_key,lora_weight,width,height,
+                generation_mode,input_image_path,denoise,control_type,control_character,auto_tagger,
+                workflow_key,prompt_source,character_key,mock_result,charged_fen,status,created_at,source,
+                translation_mode,fast_translation_request_code,request_fingerprint,translating_started_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                job_code, user_id, username[:120], None,
+                raw,  # prompt placeholder - will be replaced by worker
+                raw,  # original_prompt
+                None,  # effective_prompt - NULL until translation completes
+                0,  # use_agent
+                request_id, style_key, float(lora_weight), width, height,
+                mode, input_image_path, float(denoise), control_type, control_character,
+                1 if auto_tagger else 0,
+                workflow_key or style_key,
+                f"fast_translate_pending:{request_code}",
+                _validate_character_key(json.dumps(resolved_chars, ensure_ascii=False) if resolved_chars else ""),
+                str(mock_result or "")[:20],
+                total_charge,
+                "translating",
+                now,
+                "web",
+                "fast",
+                request_code,
+                fingerprint,
+                now,
+            ),
+        )
+
+        conn.commit()
+        return {
+            "job_code": job_code,
+            "charged_fen": total_charge,
+            "status": "translating",
+            "deduped": False,
+            "request_code": request_code,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def fail_fast_translation_task_refund_atomic(
+    settings: Settings,
+    *,
+    job_code: str,
+    error_code: str = "deepseek_failed",
+) -> bool:
+    """Atomically refund a failed fast translation task.
+
+    Single transaction:
+    1. Check generation task still translating
+    2. Check translation request belongs to this task
+    3. Refund generation charge
+    4. Refund fast translation charge
+    5. Write refund ledger entries
+    6. Mark translation_request = failed_refunded
+    7. Mark generation_task = failed_refunded
+
+    Idempotent: duplicate calls are no-op.
+    """
+    now = int(time.time())
+    conn = connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT user_id, charged_fen, status, fast_translation_request_code "
+            "FROM generation_tasks WHERE job_code=?",
+            (job_code,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return False
+        row_dict = dict(row)
+        current_status = str(row_dict.get("status") or "")
+        # Already refunded or terminal → no-op
+        if current_status in {"failed_refunded", "cancelled_refunded", "done"}:
+            conn.rollback()
+            return False
+        if current_status != "translating":
+            conn.rollback()
+            return False
+
+        user_id = str(row_dict["user_id"])
+        total_charged = int(row_dict["charged_fen"] or 0)
+        ft_code = str(row_dict.get("fast_translation_request_code") or "")
+
+        # Find translation request
+        tr = None
+        if ft_code:
+            tr = conn.execute(
+                "SELECT id, charged_credits, status FROM translation_requests "
+                "WHERE request_code=? AND user_id=? AND generation_job_code=?",
+                (ft_code, user_id, job_code),
+            ).fetchone()
+
+        # Check refund idempotency
+        existing_gen_refund = conn.execute(
+            "SELECT id FROM balance_ledger WHERE order_code=? AND reason='generate_failed_refund' LIMIT 1",
+            (job_code,),
+        ).fetchone()
+        if existing_gen_refund:
+            conn.rollback()
+            return False
+
+        # Update generation task status
+        cur = conn.execute(
+            "UPDATE generation_tasks SET status='failed_refunded', finished_at=?, error=?, error_code=? "
+            "WHERE job_code=? AND status='translating'",
+            (now, error_code, error_code, job_code),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            return False
+
+        # Update translation request status
+        if tr:
+            conn.execute(
+                "UPDATE translation_requests SET status='failed_refunded', finished_at=?, error_code=? WHERE id=?",
+                (now, error_code, tr["id"]),
+            )
+
+        # Refund generation charge
+        if total_charged:
+            conn.execute(
+                "UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?",
+                (total_charged, user_id),
+            )
+            conn.execute(
+                "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                "VALUES (?,?,'generate_failed_refund',?,?,?)",
+                (user_id, total_charged, job_code, "fast_translator", now),
+            )
+
+        conn.commit()
+        return True
     except Exception:
         conn.rollback()
         raise
@@ -3068,17 +3539,24 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT charged_fen,status,input_image_path,client_request_id,prompt_source FROM generation_tasks WHERE job_code=? AND user_id=?",
+            "SELECT charged_fen,status,input_image_path,client_request_id,prompt_source,"
+            "fast_translation_request_code,translation_mode "
+            "FROM generation_tasks WHERE job_code=? AND user_id=?",
             (job_code, user_id),
         ).fetchone()
         if not row:
             raise LookupError("任务不存在")
-        if row["status"] != "queued":
-            raise RuntimeError("只有 queued 任务可以取消")
-        charged_fen = int(row["charged_fen"])
+        row_dict = dict(row)
+        current_status = str(row_dict.get("status") or "")
+        if current_status not in {"queued", "translating"}:
+            raise RuntimeError("只有 queued 或 translating 任务可以取消")
+        charged_fen = int(row_dict["charged_fen"])
+        translation_mode = str(row_dict.get("translation_mode") or "none")
+        ft_code = str(row_dict.get("fast_translation_request_code") or "")
+
         cur = conn.execute(
             "UPDATE generation_tasks SET status='cancelled_refunded',finished_at=?,error='cancelled from web' "
-            "WHERE job_code=? AND user_id=? AND status='queued'",
+            "WHERE job_code=? AND user_id=? AND status IN ('queued','translating')",
             (now, job_code, user_id),
         )
         if cur.rowcount != 1:
@@ -3092,46 +3570,43 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
                 (user_id, charged_fen, job_code, user_id, now),
             )
             total_refunded += charged_fen
-        # Refund translation fee if one exists for this task
-        # First try by client_request_id, then by prompt_source fast_translate:<code>
-        client_req_id = str(dict(row).get("client_request_id") or "").strip()
-        prompt_src = str(dict(row).get("prompt_source") or "").strip()
-        tr = None
-        if client_req_id:
+
+        # Refund translation fee using explicit server-side binding
+        # Use fast_translation_request_code (server-generated, trustworthy)
+        # NOTE: For fast translation (translation_mode='fast'), charged_fen already
+        # includes the translation cost, so we only update the translation request status
+        # without additional refund.
+        if ft_code:
             tr = conn.execute(
-                "SELECT id,request_code,charged_credits FROM translation_requests "
-                "WHERE user_id=? AND client_request_id=? AND status='done'",
-                (user_id, client_req_id),
+                "SELECT id,request_code,charged_credits,status FROM translation_requests "
+                "WHERE request_code=? AND user_id=? AND generation_job_code=?",
+                (ft_code, user_id, job_code),
             ).fetchone()
-        if not tr and prompt_src.startswith("fast_translate:"):
-            ft_code = prompt_src.split(":", 1)[1].strip()
-            if ft_code:
-                tr = conn.execute(
-                    "SELECT id,request_code,charged_credits FROM translation_requests "
-                    "WHERE request_code=? AND user_id=? AND status='done'",
-                    (ft_code, user_id),
-                ).fetchone()
-        if tr:
-            tr_charged = int(tr["charged_credits"] or 0)
-            if tr_charged:
-                existing_refund = conn.execute(
-                    "SELECT id FROM balance_ledger WHERE order_code=? AND reason='fast_translate_cancel_refund' LIMIT 1",
-                    (tr["request_code"],),
-                ).fetchone()
-                if not existing_refund:
-                    conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (tr_charged, user_id))
-                    conn.execute(
-                        "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
-                        "VALUES (?,?,'fast_translate_cancel_refund',?,?,?)",
-                        (user_id, tr_charged, tr["request_code"], user_id, now),
-                    )
-                    conn.execute(
-                        "UPDATE translation_requests SET status='cancelled_refunded' WHERE id=?",
-                        (tr["id"],),
-                    )
-                    total_refunded += tr_charged
+            if tr and str(tr["status"] or "") in {"queued", "processing", "done"}:
+                if translation_mode != "fast":
+                    # Only separately refund for old-style fast translations where
+                    # charged_fen does NOT include translation cost
+                    tr_charged = int(tr["charged_credits"] or 0)
+                    if tr_charged:
+                        existing_refund = conn.execute(
+                            "SELECT id FROM balance_ledger WHERE order_code=? AND reason='fast_translate_cancel_refund' LIMIT 1",
+                            (tr["request_code"],),
+                        ).fetchone()
+                        if not existing_refund:
+                            conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (tr_charged, user_id))
+                            conn.execute(
+                                "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                                "VALUES (?,?,'fast_translate_cancel_refund',?,?,?)",
+                                (user_id, tr_charged, tr["request_code"], user_id, now),
+                            )
+                            total_refunded += tr_charged
+                conn.execute(
+                    "UPDATE translation_requests SET status='cancelled_refunded', finished_at=? WHERE id=?",
+                    (now, tr["id"]),
+                )
+
         conn.commit()
-        return total_refunded, row["input_image_path"]
+        return total_refunded, row_dict["input_image_path"]
     except Exception:
         conn.rollback()
         raise

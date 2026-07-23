@@ -61,6 +61,7 @@ from .db import (
     connect,
     create_conversation,
     create_feedback_report,
+    create_fast_translation_task_atomic,
     create_smart_agent_queued_task_atomic,
     create_smart_agent_task_atomic,
     create_task_atomic,
@@ -69,6 +70,7 @@ from .db import (
     create_image_refund_review,
     ensure_schema,
     email_account_has_password,
+    fail_fast_translation_task_refund_atomic,
     fail_smart_agent_task_refund,
     add_support_message,
     get_conversation,
@@ -202,6 +204,7 @@ from .smart_agent.v2_store import (
 from .smart_agent.v2_worker import process_smart_agent_turn_v2
 from .routes.ai_support import router as ai_support_router
 from .routes.fast_translate import router as fast_translate_router
+from .services.fast_translation_worker import fast_translation_worker_loop
 
 app = FastAPI(title="UMA Web MVP", docs_url=None, redoc_url=None)
 settings = get_settings()
@@ -642,6 +645,7 @@ async def startup() -> None:
     app.state.smart_agent_worker = asyncio.create_task(smart_agent_worker_loop())
     app.state.smart_agent_chat_worker = asyncio.create_task(smart_agent_chat_worker_loop())
     app.state.image_refund_worker = asyncio.create_task(image_refund_reviewer_loop())
+    app.state.fast_translation_worker = asyncio.create_task(fast_translation_worker_loop(settings))
 
 
 @app.on_event("shutdown")
@@ -665,6 +669,13 @@ async def shutdown() -> None:
         refund_worker.cancel()
         try:
             await refund_worker
+        except asyncio.CancelledError:
+            pass
+    ft_worker = getattr(app.state, "fast_translation_worker", None)
+    if ft_worker:
+        ft_worker.cancel()
+        try:
+            await ft_worker
         except asyncio.CancelledError:
             pass
 
@@ -6068,6 +6079,7 @@ async def create_task(
     original_prompt: str | None = Form(default=None),
     prompt_source: str | None = Form(default=None),
     fast_translation_request_code: str | None = Form(default=None),
+    translation_mode: str = Form("none"),
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6083,6 +6095,132 @@ async def create_task(
 
     legacy_id = get_legacy_user_id_for_session(user, s)
     input_path = None
+
+    # Server determines translation_mode, not client
+    server_translation_mode = str(translation_mode or "none").strip().lower()
+    if server_translation_mode not in {"none", "normal", "fast"}:
+        server_translation_mode = "none"
+
+    # Fast translation path: single atomic call
+    if server_translation_mode == "fast":
+        if not s.fast_translator_enabled:
+            raise HTTPException(status_code=400, detail="极速翻译当前未启用")
+
+        raw_prompt = (original_prompt or prompt or "").strip()
+
+        # Parse character resolution
+        char_keys: list[str] = []
+        char_decision = "none"
+        if character_resolution:
+            try:
+                res_obj = json.loads(character_resolution)
+                if isinstance(res_obj, dict):
+                    from .smart_agent.disambiguation_engine import validate_character_resolution, analyze_character_mentions
+                    try:
+                        validated = validate_character_resolution(raw_prompt, res_obj)
+                        char_keys = [
+                            str(item.get("characterId") or item.get("key") or "").strip()
+                            for item in validated.get("resolvedCharacters", []) or []
+                            if str(item.get("characterId") or item.get("key") or "").strip()
+                        ]
+                        char_keys = list(dict.fromkeys(char_keys))
+                        char_decision = "resolved" if char_keys else "none"
+                    except ValueError:
+                        pass
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            # No resolution provided: analyze for ambiguity
+            from .smart_agent.disambiguation_engine import analyze_character_mentions
+            parsed = analyze_character_mentions(raw_prompt)
+            if parsed.get("status") in {"ambiguous", "mixed"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "ok": False,
+                        "code": "character_resolution_required",
+                        "message": "请选择具体人物后继续生成",
+                        "requiresCharacterSelection": True,
+                        "resolution": parsed,
+                        "characterResolution": parsed,
+                    },
+                )
+            # Auto-resolve from library
+            char_keys = [
+                str(item.get("characterId") or "").strip()
+                for item in parsed.get("resolvedCharacters", []) or []
+                if str(item.get("characterId") or "").strip()
+            ]
+            char_keys = list(dict.fromkeys(char_keys))
+            char_decision = "library" if char_keys else "none"
+
+        job_code = make_job_code()
+        if input_image and input_image.filename:
+            input_path = await _save_upload(s, input_image, job_code)
+
+        safe_mock_result = ""
+        if s.is_local_env() and s.dev_auth_bypass:
+            candidate = str(mock_result or "").strip().lower()
+            if candidate in {"success", "failed", "timeout"}:
+                safe_mock_result = candidate
+
+        try:
+            result = create_fast_translation_task_atomic(
+                s,
+                job_code=job_code,
+                user_id=legacy_id,
+                username=user.username,
+                original_prompt=(original_prompt or prompt or "").strip(),
+                translation_mode="fast",
+                style_key=style_key,
+                lora_weight=float(lora_weight),
+                width=width,
+                height=height,
+                mode=mode,
+                input_image_path=input_path,
+                denoise=float(denoise),
+                control_type=control_type,
+                control_character=control_character,
+                auto_tagger=bool(auto_tagger),
+                character_keys=char_keys,
+                character_resolution_decision=char_decision,
+                client_request_id=client_request_id,
+                mock_result=safe_mock_result,
+                workflow_key=style_key,
+            )
+            print(f"[WEB] created fast translation job={job_code} provider={user.provider} source=web")
+            return result
+        except RuntimeError as exc:
+            err_msg = str(exc)
+            if err_msg == "active_task_limit":
+                safe_cleanup_input(s, input_path)
+                raise HTTPException(status_code=429, detail={"code": "active_task_limit", "message": "你当前未完成的任务太多，请等待或取消后再提交"}) from exc
+            if err_msg == "generation_rate_limited":
+                safe_cleanup_input(s, input_path)
+                raise HTTPException(status_code=429, detail={"code": "generation_rate_limited", "message": "提交过于频繁，请稍后重试"}) from exc
+            if err_msg == "queue_full":
+                safe_cleanup_input(s, input_path)
+                raise HTTPException(status_code=429, detail={"code": "queue_full", "message": "当前生成队列已满，请稍后重试"}) from exc
+            if err_msg == "insufficient_credits":
+                safe_cleanup_input(s, input_path)
+                raise HTTPException(status_code=402, detail={"code": "insufficient_credits", "message": "Credits 不足，请充值后重试"}) from exc
+            safe_cleanup_input(s, input_path)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            err_msg = str(exc)
+            if err_msg == "client_request_id_conflict":
+                safe_cleanup_input(s, input_path)
+                raise HTTPException(status_code=409, detail={"code": "client_request_id_conflict", "message": "The same client_request_id was already used with different request content."}) from exc
+            safe_cleanup_input(s, input_path)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except PermissionError as exc:
+            safe_cleanup_input(s, input_path)
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception:
+            safe_cleanup_input(s, input_path)
+            raise
+
+    # Normal/none translation path (existing flow)
     try:
         task_prompt = prompt.strip()
         task_prompt_source = ""
