@@ -6067,6 +6067,7 @@ async def create_task(
     character_resolution: str | None = Form(default=None),
     original_prompt: str | None = Form(default=None),
     prompt_source: str | None = Form(default=None),
+    fast_translation_request_code: str | None = Form(default=None),
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6117,8 +6118,27 @@ async def create_task(
             candidate = str(mock_result or "").strip().lower()
             if candidate in {"success", "failed", "timeout"}:
                 safe_mock_result = candidate
-        # Rate limit AFTER all validation succeeds - failed validations don't consume quota
-        limiter.check(f"create:{user.user_id}", limit=5, window_seconds=60)
+        # Rate limit: only count non-deduped new requests
+        # Check if this client_request_id already exists (dedup) before counting
+        _is_dedup = False
+        if client_request_id:
+            _cid = str(client_request_id).strip()[:80]
+            if _cid:
+                _conn = connect(s)
+                try:
+                    _existing = _conn.execute(
+                        "SELECT 1 FROM generation_tasks WHERE user_id=? AND client_request_id=?",
+                        (legacy_id, _cid),
+                    ).fetchone()
+                    _is_dedup = bool(_existing)
+                finally:
+                    _conn.close()
+        if not _is_dedup:
+            limiter.check(
+                f"create:{user.user_id}",
+                limit=max(1, int(getattr(s, 'generation_submit_user_limit', 20) or 20)),
+                window_seconds=max(1, int(getattr(s, 'generation_submit_window_seconds', 60) or 60)),
+            )
         result = create_task_atomic(
             s,
             job_code=job_code,
@@ -6141,6 +6161,7 @@ async def create_task(
             character_key=task_character_key,
             mock_result=safe_mock_result,
             original_prompt=(original_prompt or "").strip()[:3000] or None,
+            fast_translation_request_code=str(fast_translation_request_code or "").strip() or None,
         )
         print(f"[WEB] created job={job_code} provider={user.provider} source=web")
         return result

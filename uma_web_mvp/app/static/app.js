@@ -2183,6 +2183,7 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
       promptForTask = fastData.prompt || promptText;
       effectivePromptForPreview = promptForTask;
       promptSource = `fast_translate:${fastData.request_code || ''}`;
+      window._lastFastTranslationCode = fastData.request_code || '';
     } catch (err) {
       const resolution = getCharacterResolutionDetail(err);
       if (resolution && !characterResolution) {
@@ -2213,6 +2214,9 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
   fd.set('auto_tagger', $('autoTagger').checked ? 'true' : 'false');
   fd.set('use_agent', translationMode === 'normal' ? 'true' : 'false');
   fd.set('client_request_id', requestId);
+  if (translationMode === 'fast' && window._lastFastTranslationCode) {
+    fd.set('fast_translation_request_code', window._lastFastTranslationCode);
+  }
   if (characterResolution) fd.set('character_resolution', JSON.stringify(characterResolution));
   if ($('inputImage').files[0]) fd.set('input_image', $('inputImage').files[0]);
 

@@ -99,7 +99,9 @@ class Settings(BaseSettings):
     owner_free_generation: bool = True
     price_fen_per_image: int = 1
     max_queue_size: int = 20
-    max_active_tasks_per_user: int = 3
+    max_active_tasks_per_user: int = 10
+    generation_submit_user_limit: int = 20
+    generation_submit_window_seconds: int = 60
     max_input_image_bytes: int = 12 * 1024 * 1024
     estimated_generation_seconds: int = 18
     estimated_agent_seconds: int = 51

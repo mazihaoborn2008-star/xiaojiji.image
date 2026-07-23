@@ -812,6 +812,7 @@ def create_task_atomic(
     use_agent: bool = False, client_request_id: str | None = None,
     prompt_source: str = "", character_key: str = "", mock_result: str = "",
     original_prompt: str | None = None,
+    fast_translation_request_code: str | None = None,
 ) -> dict[str, Any]:
     clean_mock = str(mock_result or "").strip().lower()
     if clean_mock:
@@ -836,6 +837,7 @@ def create_task_atomic(
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # ── Idempotency check: same client_request_id → return existing ──
         request_id = str(client_request_id or "").strip()[:80] or None
         if request_id:
             existing = conn.execute(
@@ -854,6 +856,30 @@ def create_task_atomic(
                     "status": existing["status"],
                     "deduped": True,
                 }
+
+        # ── Validate fast_translation_request_code if provided ──
+        ft_code = str(fast_translation_request_code or "").strip()
+        if ft_code:
+            tr = conn.execute(
+                "SELECT id,request_code,charged_credits,refined_prompt,original_text,"
+                "character_keys_json,translation_mode,status,client_request_id "
+                "FROM translation_requests WHERE request_code=? AND user_id=?",
+                (ft_code, user_id),
+            ).fetchone()
+            if not tr:
+                raise ValueError("fast_translation_not_found")
+            if str(tr["status"] or "") != "done":
+                raise ValueError("fast_translation_not_ready")
+            refined = str(tr["refined_prompt"] or "").strip()
+            if not refined:
+                raise ValueError("fast_translation_not_ready")
+            # Use server-side validated data
+            prompt = refined
+            original_prompt = str(tr["original_text"] or "")
+            prompt_source = f"fast_translate:{tr['request_code']}"
+            character_key = str(tr["character_keys_json"] or "")
+            use_agent = False
+
         global_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
         ).fetchone()[0])
@@ -3042,7 +3068,7 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT charged_fen,status,input_image_path FROM generation_tasks WHERE job_code=? AND user_id=?",
+            "SELECT charged_fen,status,input_image_path,client_request_id,prompt_source FROM generation_tasks WHERE job_code=? AND user_id=?",
             (job_code, user_id),
         ).fetchone()
         if not row:
@@ -3057,6 +3083,7 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
         )
         if cur.rowcount != 1:
             raise RuntimeError("任务状态已变化，无法取消")
+        total_refunded = 0
         if charged_fen:
             conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (charged_fen, user_id))
             conn.execute(
@@ -3064,8 +3091,47 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
                 "VALUES (?,?,'generate_cancel_refund',?,?,?)",
                 (user_id, charged_fen, job_code, user_id, now),
             )
+            total_refunded += charged_fen
+        # Refund translation fee if one exists for this task
+        # First try by client_request_id, then by prompt_source fast_translate:<code>
+        client_req_id = str(dict(row).get("client_request_id") or "").strip()
+        prompt_src = str(dict(row).get("prompt_source") or "").strip()
+        tr = None
+        if client_req_id:
+            tr = conn.execute(
+                "SELECT id,request_code,charged_credits FROM translation_requests "
+                "WHERE user_id=? AND client_request_id=? AND status='done'",
+                (user_id, client_req_id),
+            ).fetchone()
+        if not tr and prompt_src.startswith("fast_translate:"):
+            ft_code = prompt_src.split(":", 1)[1].strip()
+            if ft_code:
+                tr = conn.execute(
+                    "SELECT id,request_code,charged_credits FROM translation_requests "
+                    "WHERE request_code=? AND user_id=? AND status='done'",
+                    (ft_code, user_id),
+                ).fetchone()
+        if tr:
+            tr_charged = int(tr["charged_credits"] or 0)
+            if tr_charged:
+                existing_refund = conn.execute(
+                    "SELECT id FROM balance_ledger WHERE order_code=? AND reason='fast_translate_cancel_refund' LIMIT 1",
+                    (tr["request_code"],),
+                ).fetchone()
+                if not existing_refund:
+                    conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (tr_charged, user_id))
+                    conn.execute(
+                        "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                        "VALUES (?,?,'fast_translate_cancel_refund',?,?,?)",
+                        (user_id, tr_charged, tr["request_code"], user_id, now),
+                    )
+                    conn.execute(
+                        "UPDATE translation_requests SET status='cancelled_refunded' WHERE id=?",
+                        (tr["id"],),
+                    )
+                    total_refunded += tr_charged
         conn.commit()
-        return charged_fen, row["input_image_path"]
+        return total_refunded, row["input_image_path"]
     except Exception:
         conn.rollback()
         raise
