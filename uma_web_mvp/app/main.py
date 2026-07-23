@@ -6066,6 +6066,7 @@ async def create_task(
     client_request_id: str | None = Form(default=None),
     character_resolution: str | None = Form(default=None),
     original_prompt: str | None = Form(default=None),
+    prompt_source: str | None = Form(default=None),
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6095,7 +6096,7 @@ async def create_task(
             # 限制最大长度
             if len(task_prompt) > 3000:
                 raise ValueError("prompt_too_long")
-            task_prompt_source = "user_raw"
+            task_prompt_source = str(prompt_source or "").strip() or "user_raw"
             task_character_key = ""
         else:
             if not task_prompt:

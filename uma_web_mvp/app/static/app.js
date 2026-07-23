@@ -11,6 +11,7 @@ let queueStatusTimer = null;
 let queueStatusPollingActive = false;
 let taskSummaryData = {active_count: 0, smart_planning_count: 0, queued_count: 0, translating_count: 0, processing_count: 0};
 const outputFileCache = new Map();
+const balanceRefreshedTerminalTasks = new Set();
 let historyOffset = 0;
 let historyLoadInFlight = false;
 let currentTaskLoadInFlight = false;
@@ -780,9 +781,9 @@ function renderCurrentTask(task) {
     const sk = task.style_key || 'style_a';
     const w = task.width || 1024;
     const h = task.height || 1536;
-    const agentText = isSmartAgent ? t('task.smart_agent_badge', '智能 Agent') : `Agent ${usesAgent ? t('task.agent_on', '已开启') : t('task.agent_off', '未使用')}`;
+    const agentLabel = taskTranslationLabel(task);
     const workflow = isSmartAgent && task.workflow_key ? ` · ${t('task.workflow', '工作流')} ${task.workflow_key}` : '';
-    metaEl.textContent = `${mode} · ${sk} · ${w}×${h} · ${agentText}${workflow}`;
+    metaEl.textContent = `${mode} · ${sk} · ${w}×${h} · ${agentLabel}${workflow}`;
     container.append(metaEl);
   }
 
@@ -1054,6 +1055,13 @@ async function loadCurrentTask() {
     currentTaskPosition = null;
     if (task && task.job_code && (task.status === 'smart_planning' || task.status === 'queued' || task.status === 'translating' || task.status === 'processing')) {
       currentTaskPosition = await loadTaskPosition(task.job_code);
+    }
+    // Refresh balance once when task enters a refund terminal state
+    if (task && task.job_code && (task.status === 'cancelled_refunded' || task.status === 'failed_refunded')) {
+      if (!balanceRefreshedTerminalTasks.has(task.job_code)) {
+        balanceRefreshedTerminalTasks.add(task.job_code);
+        refreshMeAndBalance();
+      }
     }
     renderCurrentTask(task);
   } catch(e) {
@@ -1514,7 +1522,7 @@ function historyCard(task) {
 
   const meta = document.createElement('div');
   meta.className = 'ht-meta';
-  meta.textContent = `${task.generation_mode} · ${task.style_key} · ${task.width}×${task.height} · ${isSmartAgent ? t('task.smart_agent_badge', '智能 Agent') : `Agent ${Number(task.use_agent || 0) ? t('task.agent_on', '已开启') : t('task.agent_off', '未使用')}`} · ${new Date(task.created_at*1000).toLocaleString()}`;
+  meta.textContent = `${task.generation_mode} · ${task.style_key} · ${task.width}×${task.height} · ${taskTranslationLabel(task)} · ${new Date(task.created_at*1000).toLocaleString()}`;
   card.append(meta);
   if (task.job_code === activeJobCode) card.classList.add('active');
   card.addEventListener('click', (event) => {
@@ -1572,6 +1580,38 @@ function historyCard(task) {
 // =====================
 // Load user info
 // =====================
+async function refreshMeAndBalance() {
+  try {
+    const latestMe = await api('/api/me');
+    me = latestMe;
+    const balanceEl = $('balance');
+    if (balanceEl) balanceEl.textContent = credits(latestMe.balance_fen);
+    return latestMe;
+  } catch(e) {
+    console.warn('[UI] refreshMeAndBalance failed:', e.message);
+    return null;
+  }
+}
+
+function taskTranslationLabel(task) {
+  const source = String(task?.prompt_source || '');
+  if (source === 'fast_translate' || source.startsWith('fast_translate:')) {
+    return t('task.fast_translate_used', '极速翻译已使用');
+  }
+  if (source.startsWith('agent_')) {
+    return t('task.agent_on', '普通翻译已使用');
+  }
+  const isSmartAgent = task?.agent_mode === 'smart_agent';
+  if (isSmartAgent) {
+    return t('task.smart_agent_badge', '智能 Agent');
+  }
+  const usesAgent = Boolean(Number(task?.use_agent || 0));
+  if (usesAgent) {
+    return t('task.agent_on', '普通翻译已使用');
+  }
+  return t('task.agent_off', '未使用翻译');
+}
+
 async function loadMe(){
   try {
     // App init: load user identity, catalog, and current task
@@ -2163,6 +2203,7 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
   fd.set('style_key', selectedStyleKey);
   fd.set('prompt', promptForTask);
   if (translationMode === 'fast') fd.set('original_prompt', promptText);
+  fd.set('prompt_source', translationMode === 'fast' ? 'fast_translate' : '');
   fd.set('width', String(w));
   fd.set('height', String(h));
   fd.set('lora_weight', $('loraWeight').value);

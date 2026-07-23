@@ -1093,3 +1093,212 @@ class TestSafeParseCharacterKeys:
     def test_list_with_none_values(self):
         result = _safe_parse_character_keys_json('["a", null, "b"]')
         assert result == ["a", "b"]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# K. Billing semantics: same text, different/same ID
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestBillingSemantics:
+    """Verify billing semantics for fast translate.
+
+    - Different client_request_id → always charged, even same text
+    - Same client_request_id → idempotent, no double charge
+    """
+
+    def test_same_text_different_id_each_charged(self, tmp_path):
+        """Same text + different client_request_id → each charged 2."""
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        r1 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=f"billing-a-{uuid.uuid4().hex[:8]}",
+        ))
+        bal_after_1 = _get_balance(settings, TEST_USER_A)
+        assert r1.ok is True
+        assert r1.charged_credits == 2
+        assert bal_before - bal_after_1 == 2
+
+        r2 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=f"billing-b-{uuid.uuid4().hex[:8]}",
+        ))
+        bal_after_2 = _get_balance(settings, TEST_USER_A)
+        assert r2.ok is True
+        assert r2.charged_credits == 2
+        assert bal_before - bal_after_2 == 4
+
+        # Different request codes
+        assert r1.request_code != r2.request_code
+        # Two translation_requests records
+        assert _count_translation_requests(settings, TEST_USER_A) == 2
+        # Two charge ledger entries
+        assert _count_ledger(settings, TEST_USER_A, "fast_translate_charge") == 2
+
+    def test_same_text_same_id_idempotent(self, tmp_path):
+        """Same text + same client_request_id → idempotent, single charge."""
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        cid = f"billing-same-{uuid.uuid4().hex[:8]}"
+
+        r1 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=cid,
+        ))
+        bal_after_1 = _get_balance(settings, TEST_USER_A)
+
+        r2 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=cid,
+        ))
+        bal_after_2 = _get_balance(settings, TEST_USER_A)
+
+        assert r1.request_code == r2.request_code
+        assert bal_after_1 == bal_after_2
+        assert _count_translation_requests(settings, TEST_USER_A) == 1
+        assert _count_ledger(settings, TEST_USER_A, "fast_translate_charge") == 1
+
+    def test_cancel_refund_restores_generation_charge(self, tmp_path):
+        """Cancel refund restores generation charge but not translation charge."""
+        from app.db import connect as db_connect
+
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        # Create a translation request and generation task
+        cid = f"cancel-test-{uuid.uuid4().hex[:8]}"
+        r = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=cid,
+        ))
+        bal_after_translate = _get_balance(settings, TEST_USER_A)
+        assert bal_before - bal_after_translate == 2
+
+        # Simulate generation charge
+        actual_job_code = f"GEN-CANCEL-{uuid.uuid4().hex[:8]}"
+        conn = db_connect(settings)
+        try:
+            conn.execute(
+                "INSERT INTO generation_tasks(job_code, user_id, username, prompt, original_prompt, "
+                "use_agent, agent_mode, workflow_key, style_key, width, height, generation_mode, "
+                "charged_fen, status, created_at, client_request_id, prompt_source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (actual_job_code, TEST_USER_A, "Test",
+                 "test prompt", "a beautiful sunset scene",
+                 0, "normal", "anima_owner", "anima_owner", 1024, 1536, "txt2img",
+                 2, "queued", int(time.time()), cid, "user_raw"),
+            )
+            conn.execute(
+                "UPDATE users SET balance_fen=balance_fen-? WHERE user_id=?",
+                (2, TEST_USER_A),
+            )
+            conn.execute(
+                "INSERT INTO balance_ledger(user_id, amount_fen, reason, order_code, operator_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (TEST_USER_A, -2, "generate_charge", actual_job_code, TEST_USER_A, int(time.time())),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        bal_after_gen = _get_balance(settings, TEST_USER_A)
+        assert bal_before - bal_after_gen == 4  # 2 translate + 2 generate
+
+        # Simulate cancel refund (generation only, not translation)
+        conn = db_connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET status='cancelled_refunded' WHERE job_code=?",
+                (actual_job_code,),
+            )
+            conn.execute(
+                "UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?",
+                (2, TEST_USER_A),
+            )
+            conn.execute(
+                "INSERT INTO balance_ledger(user_id, amount_fen, reason, order_code, operator_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (TEST_USER_A, 2, "generate_cancel_refund", actual_job_code, "system", int(time.time())),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        bal_after_cancel = _get_balance(settings, TEST_USER_A)
+        # Translation charge (2) is kept, generation charge (2) is refunded
+        assert bal_before - bal_after_cancel == 2
+        assert _count_ledger(settings, TEST_USER_A, "fast_translate_charge") == 1
+        assert _count_ledger(settings, TEST_USER_A, "generate_cancel_refund") == 1
+
+    def test_prompt_source_fast_translate(self, tmp_path):
+        """Fast translate sets correct prompt_source."""
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+
+        r = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A,
+            text="a beautiful sunset scene",
+            client_request_id=f"source-test-{uuid.uuid4().hex[:8]}",
+        ))
+        assert r.ok is True
+        assert r.character_match_source in ("library", "none", "resolved")
+
+    def test_api_me_returns_updated_balance_after_cancel(self, tmp_path):
+        """After cancel, /api/me returns updated balance."""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.config import get_settings
+
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+
+        app.dependency_overrides[get_settings] = lambda: settings
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+
+            # Get initial balance
+            r0 = client.get("/api/me")
+            assert r0.status_code == 200
+            initial_balance = r0.json()["balance_fen"]
+
+            # Submit a task (use_agent=false charges base 2 only)
+            cid = f"api-me-{uuid.uuid4().hex[:8]}"
+            r1 = client.post("/api/tasks", data={
+                "prompt": "a beautiful sunset scene",
+                "original_prompt": "a beautiful sunset scene",
+                "mode": "txt2img",
+                "style_key": "anima_owner",
+                "width": 1024,
+                "height": 1536,
+                "use_agent": "false",
+                "client_request_id": cid,
+                "prompt_source": "fast_translate",
+            }, headers={"X-CSRF-Token": "test"})
+            assert r1.status_code == 200
+            job_code = r1.json()["job_code"]
+
+            # Balance reduced by generation charge
+            r2 = client.get("/api/me")
+            assert r2.status_code == 200
+            balance_after_submit = r2.json()["balance_fen"]
+            assert initial_balance - balance_after_submit == 2
+
+            # Cancel the task
+            r3 = client.post(f"/api/tasks/{job_code}/cancel", headers={"X-CSRF-Token": "test"})
+            assert r3.status_code == 200
+
+            # /api/me returns updated (restored) balance
+            r4 = client.get("/api/me")
+            assert r4.status_code == 200
+            balance_after_cancel = r4.json()["balance_fen"]
+            assert balance_after_cancel == initial_balance  # generation charge fully refunded
+        finally:
+            app.dependency_overrides.clear()
