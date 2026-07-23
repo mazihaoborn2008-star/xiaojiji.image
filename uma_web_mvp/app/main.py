@@ -6186,6 +6186,9 @@ async def create_task(
                 input_image_stable_id=input_content_hash,
             )
             print(f"[WEB] created fast translation job={job_code} provider={user.provider} source=web")
+            # Clean up unused upload if task was deduped
+            if result.get("deduped") and input_path:
+                safe_cleanup_input(s, input_path)
             return result
         except RuntimeError as exc:
             err_msg = str(exc)
@@ -6222,7 +6225,27 @@ async def create_task(
         task_prompt = prompt.strip()
         task_prompt_source = ""
         task_character_key = ""
-        if not (bool(use_agent) and s.agent_enabled):
+
+        # Server determines final translation_mode
+        # - explicit translation_mode=normal → normal translation
+        # - explicit translation_mode=none → direct
+        # - legacy: no translation_mode but use_agent=true → normal
+        # - otherwise → none
+        if server_translation_mode == "normal":
+            final_translation_mode = "normal"
+            final_use_agent = bool(s.agent_enabled)
+        elif server_translation_mode == "none":
+            final_translation_mode = "none"
+            final_use_agent = False
+        elif bool(use_agent) and s.agent_enabled:
+            # Legacy client: use_agent=true without explicit translation_mode
+            final_translation_mode = "normal"
+            final_use_agent = True
+        else:
+            final_translation_mode = "none"
+            final_use_agent = False
+
+        if not final_use_agent:
             # ── 直通模式:原文原样写入,不做人物匹配/校验/Tag注入 ──
             if not task_prompt:
                 raise ValueError("prompt_required")
@@ -6295,7 +6318,7 @@ async def create_task(
         _gen_fingerprint = compute_generation_fingerprint(
             user_id=legacy_id,
             original_prompt=(original_prompt or task_prompt),
-            translation_mode="none",
+            translation_mode=final_translation_mode,
             character_keys=_char_keys_for_fp,
             character_resolution_decision=_char_decision_for_fp,
             style_key=style_key,
@@ -6326,15 +6349,19 @@ async def create_task(
             control_type=control_type,
             control_character=control_character,
             auto_tagger=bool(auto_tagger),
-            use_agent=bool(use_agent) and s.agent_enabled,
+            use_agent=final_use_agent,
             client_request_id=client_request_id,
             prompt_source=task_prompt_source,
             character_key=task_character_key,
             mock_result=safe_mock_result,
             original_prompt=(original_prompt or "").strip()[:3000] or None,
+            translation_mode=final_translation_mode,
             request_fingerprint=_gen_fingerprint,
         )
         print(f"[WEB] created job={job_code} provider={user.provider} source=web")
+        # Clean up unused upload if task was deduped (idempotent return)
+        if result.get("deduped") and input_path:
+            safe_cleanup_input(s, input_path)
         return result
     except PermissionError as exc:
         safe_cleanup_input(s, input_path)
