@@ -71,21 +71,24 @@ def _compute_fast_translation_fingerprint(
     user_id: str,
     text: str,
     character_keys: list[str],
-    character_resolution: dict[str, Any] | None,
+    source: str,
 ) -> str:
     """Compute stable SHA-256 fingerprint for fast translation request.
 
-    Covers all fields that affect the translation result:
+    Covers only fields that affect the final translation result:
     - user_id (isolation)
     - original text
-    - resolved character keys (sorted for stability)
-    - raw character resolution payload (for edge cases)
+    - normalized character decision (mode + sorted unique keys)
+
+    Excludes raw frontend payloads, client_request_id, timestamps, etc.
     """
+    normalized_keys = sorted(set(k for k in character_keys if k))
+    mode = "characters" if normalized_keys else "none"
     payload = {
         "user_id": user_id,
         "text": text,
-        "character_keys": sorted(character_keys),
-        "character_resolution": character_resolution,
+        "mode": mode,
+        "character_keys": normalized_keys,
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -127,25 +130,21 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
         try:
             validated = validate_character_resolution(prompt, resolution)
         except ValueError:
-            selections = resolution.get("selections") or []
-            requested_ids = [
-                str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
-                for s in selections
-                if isinstance(s, dict)
-                   and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
-                   and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip() != NO_LIBRARY_CHARACTER_ID
-            ]
-            if requested_ids:
-                raise FastTranslatorError("invalid_character_resolution", "人物选择结果无效，请重新选择。")
-            # All selections are NO_LIBRARY_CHARACTER_ID → skip character
-            return [], "none"
+            # Re-analyze to determine if the prompt has ambiguous mentions
+            re_parsed = analyze_character_mentions(prompt)
+            if re_parsed.get("status") in {"ambiguous", "mixed"}:
+                # Prompt has ambiguous mentions that need user selection
+                raise CharacterSelectionRequired(re_parsed)
+            # No ambiguous mentions but validation failed → invalid data
+            raise FastTranslatorError(
+                "invalid_character_resolution", "人物选择结果无效，请重新选择。"
+            )
         ids = [
             str(item.get("characterId") or item.get("key") or "").strip()
             for item in validated.get("resolvedCharacters", []) or []
             if str(item.get("characterId") or item.get("key") or "").strip()
         ]
-        skipped = list(validated.get("skippedMentions") or [])
-        # Extract requested IDs from selections to validate completeness
+        # Validate that all explicitly selected non-skip IDs are among resolved
         selections = resolution.get("selections") or []
         requested_ids = [
             str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
@@ -154,17 +153,14 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
                and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
                and str(s.get("characterId") or s.get("selectedCharacterId") or "").strip() != NO_LIBRARY_CHARACTER_ID
         ]
-        requested_ids = list(dict.fromkeys(requested_ids))  # dedupe preserving order
+        requested_ids = list(dict.fromkeys(requested_ids))
         if requested_ids:
-            # User explicitly selected characters — all must be valid
             id_set = set(ids)
             invalid = [rid for rid in requested_ids if rid not in id_set]
             if invalid:
                 raise FastTranslatorError("invalid_character_resolution", "人物选择结果无效，请重新选择。")
         if ids:
             return list(dict.fromkeys(ids)), "resolved"
-        if skipped:
-            return [], "none"
         return [], "none"
     parsed = analyze_character_mentions(prompt)
     if parsed.get("status") in {"ambiguous", "mixed"}:
@@ -179,6 +175,17 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
     return [], "none"
 
 
+def _safe_parse_character_keys_json(raw: str) -> list[str] | None:
+    """Safely parse character_keys_json from DB. Returns None on failure."""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, list):
+        return None
+    return [str(k) for k in data if k]
+
+
 def _begin_charge(
     settings: Settings,
     *,
@@ -187,7 +194,6 @@ def _begin_charge(
     client_request_id: str | None,
     character_keys: list[str],
     source: str,
-    character_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = int(time.time())
     request_id = str(client_request_id or "").strip()[:80] or None
@@ -197,7 +203,7 @@ def _begin_charge(
         user_id=user_id,
         text=text,
         character_keys=character_keys,
-        character_resolution=character_resolution,
+        source=source,
     )
     conn = connect(settings)
     try:
@@ -208,18 +214,42 @@ def _begin_charge(
                 (user_id, request_id),
             ).fetchone()
             if existing:
-                existing_fp = str(existing["request_fingerprint"] or "")
-                if existing_fp and existing_fp != fingerprint:
-                    conn.rollback()
-                    raise ClientRequestIdConflict()
-                # Legacy rows without fingerprint: fall back to text comparison
-                if not existing_fp:
-                    existing_text = str(existing["original_text"] or "")
+                existing = dict(existing)
+                existing_fp = str(existing.get("request_fingerprint") or "")
+                if existing_fp:
+                    if existing_fp != fingerprint:
+                        conn.rollback()
+                        raise ClientRequestIdConflict()
+                else:
+                    # Legacy row without fingerprint: compare text + character decision
+                    existing_text = str(existing.get("original_text") or "")
                     if existing_text != text:
                         conn.rollback()
                         raise ClientRequestIdConflict()
+                    legacy_keys = _safe_parse_character_keys_json(
+                        str(existing.get("character_keys_json") or "[]")
+                    )
+                    legacy_source = str(existing.get("character_match_source") or "none")
+                    if legacy_keys is None:
+                        # Malformed JSON → cannot compare → treat as conflict
+                        conn.rollback()
+                        raise ClientRequestIdConflict()
+                    legacy_fp = _compute_fast_translation_fingerprint(
+                        user_id=user_id,
+                        text=existing_text,
+                        character_keys=legacy_keys,
+                        source=legacy_source,
+                    )
+                    if legacy_fp != fingerprint:
+                        conn.rollback()
+                        raise ClientRequestIdConflict()
+                    # Same character decision — safe to reuse and backfill fingerprint
+                    conn.execute(
+                        "UPDATE translation_requests SET request_fingerprint=? WHERE id=?",
+                        (fingerprint, existing["id"]),
+                    )
                 conn.commit()
-                return {"existing": dict(existing)}
+                return {"existing": existing}
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
         ledger_id = None
         if cost:
@@ -335,7 +365,6 @@ async def fast_refine_prompt(
         client_request_id=client_request_id,
         character_keys=character_keys,
         source=source,
-        character_resolution=character_resolution,
     )
     if "existing" in charge:
         return _result_from_row(charge["existing"])

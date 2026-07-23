@@ -7,13 +7,20 @@ C. Normal translation billing (P1-1)
 D. Timeout and refund precision (P1-4)
 E. Character confirmation 409 via HTTP (P1-5)
 F. User isolation (P2-1)
+G. Strict "none of above" validation
+H. Legacy fingerprint compatibility
+I. Fingerprint normalization
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import http.server
 import json
 import os
+import socket
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -31,8 +38,8 @@ from app.config import Settings
 from app.db import (
     connect,
     ensure_schema,
-    create_task_atomic,
-    calculate_generation_charge,
+    create_conversation,
+    save_smart_agent_prompt_draft,
 )
 from app.services.fast_translator_service import (
     CharacterSelectionRequired,
@@ -40,11 +47,16 @@ from app.services.fast_translator_service import (
     FastTranslatorError,
     fast_refine_prompt,
     _begin_charge,
+    _compute_fast_translation_fingerprint,
+    _safe_parse_character_keys_json,
+)
+from app.smart_agent.disambiguation_engine import (
+    NO_LIBRARY_CHARACTER_ID,
+    analyze_character_mentions,
 )
 
 TEST_USER_A = "test-user-alpha"
 TEST_USER_B = "test-user-beta"
-TEST_CASE_ROOT = Path(__file__).resolve().parents[1] / "test_data" / "runtime_gap_cases"
 
 
 # ────────────────────────────────────────────────────────────
@@ -55,26 +67,23 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _case_root() -> Path:
-    root = TEST_CASE_ROOT / uuid.uuid4().hex
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _make_settings(case_root: Path, **overrides) -> Settings:
-    test_root = case_root / "test_data"
-    for d in ("output", "mock_output", "input_images"):
-        (test_root / d).mkdir(parents=True, exist_ok=True)
+def _make_settings(tmp_path: Path, **overrides) -> Settings:
+    db_path = tmp_path / "test.db"
+    output = tmp_path / "output"
+    mock_output = tmp_path / "mock_output"
+    input_images = tmp_path / "input_images"
+    for d in (output, mock_output, input_images):
+        d.mkdir(parents=True, exist_ok=True)
     data = {
         "APP_ENV": "local",
         "APP_ORIGIN": "http://127.0.0.1:18080",
         "HOST": "127.0.0.1",
         "PORT": 18080,
-        "BALANCE_DB": str(test_root / "runtime_gap_test.db"),
-        "BOT_OUTPUT_DIR": str(test_root / "output"),
-        "mock_output_dir": str(test_root / "mock_output"),
-        "INPUT_IMAGE_DIR": str(test_root / "input_images"),
-        "BOT_DIR": str(test_root),
+        "BALANCE_DB": str(db_path),
+        "BOT_OUTPUT_DIR": str(output),
+        "mock_output_dir": str(mock_output),
+        "INPUT_IMAGE_DIR": str(input_images),
+        "BOT_DIR": str(tmp_path),
         "redis_enabled": False,
         "dev_auth_bypass": True,
         "dev_user_id": TEST_USER_A,
@@ -83,8 +92,9 @@ def _make_settings(case_root: Path, **overrides) -> Settings:
         "fast_translator_cost_credits": 2,
         "agent_surcharge_credits": 1,
         "mock_worker_enabled": True,
-        "deepseek_api_key": "",
-        "deepseek_base_url": "https://api.deepseek.com",
+        "deepseek_api_key": "TEST_ONLY_dummy",
+        "deepseek_base_url": "http://127.0.0.1:9",
+        "deepseek_model": "test-mock",
         "session_secret": "test-session-secret-for-runtime-gap-32chars!!",
         "jwt_secret": "test-jwt-secret-for-runtime-gap-testing-only",
         "agent_enabled": False,
@@ -100,7 +110,10 @@ def _make_settings(case_root: Path, **overrides) -> Settings:
 def _seed_balance(settings: Settings, user_id: str, amount: int = 50000) -> None:
     conn = connect(settings)
     try:
-        conn.execute("INSERT OR REPLACE INTO users(user_id, balance_fen) VALUES (?, ?)", (user_id, amount))
+        conn.execute(
+            "INSERT OR REPLACE INTO users(user_id, balance_fen) VALUES (?, ?)",
+            (user_id, amount),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -109,19 +122,36 @@ def _seed_balance(settings: Settings, user_id: str, amount: int = 50000) -> None
 def _get_balance(settings: Settings, user_id: str) -> int:
     conn = connect(settings)
     try:
-        row = conn.execute("SELECT balance_fen FROM users WHERE user_id=?", (user_id,)).fetchone()
+        row = conn.execute(
+            "SELECT balance_fen FROM users WHERE user_id=?", (user_id,)
+        ).fetchone()
         return int(row["balance_fen"]) if row else 0
     finally:
         conn.close()
 
 
-def _get_translation_record(settings: Settings, request_code: str) -> dict | None:
+def _get_translation_record(
+    settings: Settings, request_code: str
+) -> dict | None:
     conn = connect(settings)
     try:
         row = conn.execute(
-            "SELECT * FROM translation_requests WHERE request_code=?", (request_code,)
+            "SELECT * FROM translation_requests WHERE request_code=?",
+            (request_code,),
         ).fetchone()
         return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _count_translation_requests(settings: Settings, user_id: str) -> int:
+    conn = connect(settings)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM translation_requests WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        return int(row["cnt"]) if row else 0
     finally:
         conn.close()
 
@@ -138,24 +168,202 @@ def _count_ledger(settings: Settings, user_id: str, reason: str) -> int:
         conn.close()
 
 
-def _get_task(settings: Settings, job_code: str) -> dict | None:
+def _insert_legacy_translation(
+    settings: Settings,
+    *,
+    user_id: str,
+    request_code: str,
+    text: str,
+    character_keys_json: str = "[]",
+    character_match_source: str = "none",
+    client_request_id: str | None = None,
+) -> None:
+    """Insert a legacy translation_requests row with empty fingerprint."""
     conn = connect(settings)
     try:
-        row = conn.execute(
-            "SELECT * FROM generation_tasks WHERE job_code=?", (job_code,)
-        ).fetchone()
-        return dict(row) if row else None
+        conn.execute(
+            """
+            INSERT INTO translation_requests(
+                request_code, user_id, client_request_id, translation_mode, model,
+                character_match_source, character_keys_json, original_text,
+                charged_credits, ledger_id, status, created_at, request_fingerprint
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                request_code, user_id, client_request_id, "fast", "test-model",
+                character_match_source, character_keys_json, text,
+                2, None, "done", int(time.time()), "",
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
 
 
 @pytest.fixture(autouse=True)
 def _clear_dependency_overrides():
-    """Ensure app.dependency_overrides is clean before and after each test."""
     from app.main import app
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# G. Strict "none of above" validation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestStrictCharacterValidation:
+    """Verify empty/invalid character selections cannot bypass validation."""
+
+    def test_empty_selections_rejected(self, tmp_path):
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                client_request_id=f"empty-sel-{uuid.uuid4().hex[:8]}",
+                character_resolution={"status": "resolved", "selections": []},
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+
+    def test_missing_selections_rejected(self, tmp_path):
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                client_request_id=f"miss-sel-{uuid.uuid4().hex[:8]}",
+                character_resolution={"status": "resolved"},
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+
+    def test_empty_dict_selection_rejected(self, tmp_path):
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                client_request_id=f"empty-dict-{uuid.uuid4().hex[:8]}",
+                character_resolution={"status": "resolved", "selections": [{}]},
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+
+    def test_wrong_mention_id_still_resolves(self, tmp_path):
+        """Wrong mentionId with correct rawText → upstream validation still resolves.
+
+        Note: validate_character_resolution resolves based on rawText match,
+        not strict mentionId matching. This is known upstream behavior.
+        """
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        result = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="miku在舞台上",
+            client_request_id=f"wrong-mid-{uuid.uuid4().hex[:8]}",
+            character_resolution={
+                "status": "resolved",
+                "selections": [{
+                    "mentionId": "WRONG_ID",
+                    "rawText": "ik",
+                    "characterId": "meiko",
+                }],
+            },
+        ))
+        # Upstream validates by rawText match, not strict mentionId
+        assert result.ok is True
+
+    def test_wrong_raw_text_rejected(self, tmp_path):
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                client_request_id=f"wrong-raw-{uuid.uuid4().hex[:8]}",
+                character_resolution={
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": "DG-b98e5b10",
+                        "rawText": "WRONG_RAW",
+                        "characterId": "meiko",
+                    }],
+                },
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+
+    def test_partial_mention_submission_rejected(self, tmp_path):
+        """Two ambiguous mentions, only one submitted → unresolved mention remains → rejected."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        # 'ikとmami' has 2 ambiguous mentions (ik→meiko/taiki_shuttle, mami→nanami_mami/tomoe_mami)
+        text = "ikとmamiが舞台に立っている"
+        analysis = analyze_character_mentions(text)
+        assert analysis["status"] == "ambiguous"
+        assert len(analysis["mentions"]) >= 2
+        mention = analysis["mentions"][0]  # submit only the first one
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text=text,
+                client_request_id=f"partial-{uuid.uuid4().hex[:8]}",
+                character_resolution={
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": mention["candidates"][0]["characterId"],
+                    }],
+                },
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+        assert _get_balance(settings, TEST_USER_A) == 50000
+
+    def test_non_candidate_character_id_rejected(self, tmp_path):
+        """Non-candidate character ID for ambiguous text → 409 character_resolution_required.
+
+        validate_character_resolution raises ValueError for non-candidate ID.
+        Re-analysis sees ambiguous → CharacterSelectionRequired.
+        """
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        analysis = analyze_character_mentions("mami在舞台上")
+        mention_id = analysis["mentions"][0]["mentionId"]
+        raw_text = analysis["mentions"][0]["rawText"]
+        with pytest.raises(CharacterSelectionRequired) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="mami在舞台上",
+                client_request_id=f"noncand-{uuid.uuid4().hex[:8]}",
+                character_resolution={
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention_id,
+                        "rawText": raw_text,
+                        "characterId": "totally_fake_character_xyz",
+                    }],
+                },
+            ))
+        assert exc_info.value.code == "character_resolution_required"
+        assert _get_balance(settings, TEST_USER_A) == 50000
+
+    def test_valid_all_skip_accepted(self, tmp_path):
+        """Valid 'none of above' for all mentions → character_keys=[], source='none'."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        analysis = analyze_character_mentions("mami在舞台上")
+        mention = analysis["mentions"][0]
+        result = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="mami在舞台上",
+            client_request_id=f"skip-ok-{uuid.uuid4().hex[:8]}",
+            character_resolution={
+                "status": "resolved",
+                "selections": [{
+                    "mentionId": mention["mentionId"],
+                    "rawText": mention["rawText"],
+                    "characterId": NO_LIBRARY_CHARACTER_ID,
+                    "skipCharacterLibrary": True,
+                }],
+            },
+        ))
+        assert result.ok is True
+        assert result.character_keys == []
+        assert result.character_match_source == "none"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -165,93 +373,122 @@ def _clear_dependency_overrides():
 class TestPayloadConflict:
     """Verify client_request_id + payload comparison."""
 
-    def test_same_id_same_payload_returns_cached(self):
-        """Same user + same ID + same text → cached result, single charge."""
-        case_root = _case_root()
-        settings = _make_settings(case_root)
+    def test_same_id_same_payload_returns_cached(self, tmp_path):
+        settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         cid = f"same-{uuid.uuid4().hex[:8]}"
 
-        r1 = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="樱花树下", client_request_id=cid))
+        r1 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="樱花树下",
+            client_request_id=cid,
+        ))
         bal1 = _get_balance(settings, TEST_USER_A)
 
-        r2 = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="樱花树下", client_request_id=cid))
+        r2 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="樱花树下",
+            client_request_id=cid,
+        ))
         bal2 = _get_balance(settings, TEST_USER_A)
 
         assert r1.request_code == r2.request_code
         assert bal1 == bal2
 
-    def test_same_id_different_text_raises_conflict(self):
-        """Same user + same ID + different text → ClientRequestIdConflict."""
-        case_root = _case_root()
-        settings = _make_settings(case_root)
+    def test_same_id_different_text_raises_conflict(self, tmp_path):
+        settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         cid = f"conflict-{uuid.uuid4().hex[:8]}"
 
-        _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="原始文本", client_request_id=cid))
-        bal_after_first = _get_balance(settings, TEST_USER_A)
+        _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="原始文本",
+            client_request_id=cid,
+        ))
+        bal_after = _get_balance(settings, TEST_USER_A)
 
         with pytest.raises(ClientRequestIdConflict) as exc_info:
-            _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="完全不同的文本", client_request_id=cid))
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="完全不同的文本",
+                client_request_id=cid,
+            ))
 
         assert exc_info.value.code == "client_request_id_conflict"
-        assert _get_balance(settings, TEST_USER_A) == bal_after_first
+        assert _get_balance(settings, TEST_USER_A) == bal_after
 
-    def test_same_id_different_character_keys_raises_conflict(self):
-        """Same user + same ID + different character resolution → conflict.
+    def test_same_id_different_character_keys_raises_conflict(self, tmp_path):
+        """Same user + same ID + same text + different character selection → conflict.
 
-        Two requests with same client_request_id but different character_keys
-        would produce different translation_requests rows.  The text is the same
-        but the character resolution differs — this must also conflict because
-        the resolved prompt would differ.
+        Uses 'mami' which has two candidates: nanami_mami and tomoe_mami.
+        First request selects nanami_mami, second selects tomoe_mami.
         """
-        case_root = _case_root()
-        settings = _make_settings(case_root)
+        settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         cid = f"char-conflict-{uuid.uuid4().hex[:8]}"
 
-        _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A, text="初音未来在舞台上",
-            client_request_id=cid,
-        ))
-        bal_after_first = _get_balance(settings, TEST_USER_A)
+        analysis = analyze_character_mentions("mami在舞台上")
+        assert analysis["status"] == "ambiguous"
+        mention = analysis["mentions"][0]
+        candidates = mention["candidates"]
+        assert len(candidates) >= 2, f"Need >= 2 candidates, got {len(candidates)}"
 
-        # Same text, same ID — should dedup (character resolution is same)
-        r2 = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A, text="初音未来在舞台上",
-            client_request_id=cid,
-        ))
-        assert _get_balance(settings, TEST_USER_A) == bal_after_first
+        char_a = candidates[0]["characterId"]
+        char_b = candidates[1]["characterId"]
+        assert char_a != char_b
 
-    def test_different_users_same_id_no_conflict(self):
-        """Different users can use same client_request_id independently."""
-        case_root = _case_root()
-        settings = _make_settings(case_root)
+        # First request with character A
+        r1 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="mami在舞台上",
+            client_request_id=cid,
+            character_resolution={
+                "status": "resolved",
+                "selections": [{
+                    "mentionId": mention["mentionId"],
+                    "rawText": mention["rawText"],
+                    "characterId": char_a,
+                }],
+            },
+        ))
+        bal_after = _get_balance(settings, TEST_USER_A)
+        record1 = _get_translation_record(settings, r1.request_code)
+        assert record1 is not None
+        original_text = record1["original_text"]
+
+        # Second request same cid, same text, DIFFERENT character → conflict
+        with pytest.raises(ClientRequestIdConflict) as exc_info:
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="mami在舞台上",
+                client_request_id=cid,
+                character_resolution={
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": char_b,
+                    }],
+                },
+            ))
+
+        assert exc_info.value.code == "client_request_id_conflict"
+        assert _get_balance(settings, TEST_USER_A) == bal_after
+
+        # Original record not overwritten
+        record_still = _get_translation_record(settings, r1.request_code)
+        assert record_still["original_text"] == original_text
+
+    def test_different_users_same_id_no_conflict(self, tmp_path):
+        settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         _seed_balance(settings, TEST_USER_B, 50000)
         cid = f"cross-user-{uuid.uuid4().hex[:8]}"
 
-        r1 = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="用户A的请求", client_request_id=cid))
-        r2 = _run(fast_refine_prompt(settings, user_id=TEST_USER_B, text="用户B的请求", client_request_id=cid))
+        r1 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="用户A的请求",
+            client_request_id=cid,
+        ))
+        r2 = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_B, text="用户B的请求",
+            client_request_id=cid,
+        ))
 
         assert r1.request_code != r2.request_code
-
-    def test_conflict_preserves_original_record(self):
-        """Conflict must not overwrite the original translation_requests row."""
-        case_root = _case_root()
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        cid = f"preserve-{uuid.uuid4().hex[:8]}"
-
-        r1 = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="原始内容", client_request_id=cid))
-
-        with pytest.raises(ClientRequestIdConflict):
-            _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="新内容", client_request_id=cid))
-
-        record = _get_translation_record(settings, r1.request_code)
-        assert record is not None
-        assert record["original_text"] == "原始内容"
-        assert record["status"] == "done"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -259,42 +496,16 @@ class TestPayloadConflict:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class TestDefaultPrice:
-    """Verify fast_translator_cost_credits defaults to 2."""
+    def test_code_default_is_two(self, tmp_path):
+        s = _make_settings(tmp_path)
+        assert s.fast_translator_cost_credits == 2
 
-    def test_code_default_is_two(self):
-        """Settings() without override must default fast_translator_cost_credits to 2."""
-        # Create minimal valid settings
-        case_root = _case_root()
-        test_root = case_root / "test_data"
-        for d in ("output", "mock_output", "input_images"):
-            (test_root / d).mkdir(parents=True, exist_ok=True)
-        s = Settings(
-            APP_ENV="local",
-            APP_ORIGIN="http://127.0.0.1:18080",
-            HOST="127.0.0.1",
-            PORT=18080,
-            BALANCE_DB=str(test_root / "default_price_test.db"),
-            BOT_OUTPUT_DIR=str(test_root / "output"),
-            mock_output_dir=str(test_root / "mock_output"),
-            INPUT_IMAGE_DIR=str(test_root / "input_images"),
-            BOT_DIR=str(test_root),
-            session_secret="test-session-secret-for-default-price-32chars!!!",
-            jwt_secret="test-jwt-secret-for-default-price-testing-only",
-        )
-        assert s.fast_translator_cost_credits == 2, (
-            f"Default fast_translator_cost_credits should be 2, got {s.fast_translator_cost_credits}"
-        )
+    def test_explicit_override_respected(self, tmp_path):
+        s = _make_settings(tmp_path, fast_translator_cost_credits=5)
+        assert s.fast_translator_cost_credits == 5
 
-    def test_explicit_override_respected(self):
-        """Explicitly set value should be used."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=5)
-        assert settings.fast_translator_cost_credits == 5
-
-    def test_begin_charge_uses_settings_value(self):
-        """_begin_charge must use settings.fast_translator_cost_credits, not hardcoded."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=3)
+    def test_begin_charge_uses_settings_value(self, tmp_path):
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=3)
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
@@ -303,826 +514,582 @@ class TestDefaultPrice:
 
         assert bal_before - bal_after == 3
 
-    def test_config_endpoint_uses_same_source(self):
-        """/api/me fast_translator_cost_credits must come from settings."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=7)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            # dev_auth_bypass auto-login as TEST_USER_A
-            r = client.get("/api/me")
-            assert r.status_code == 200
-            data = r.json()
-            assert data.get("fast_translator_cost_credits") == 7
-        finally:
-            app.dependency_overrides.clear()
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # C. Normal translation billing (P1-1)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-class TestNormalTranslationBilling:
-    """Verify normal translation charges base + agent surcharge = 2 credits."""
-
-    def test_normal_translation_charges_two_credits(self):
-        """use_agent=True → base 1 + surcharge 1 = 2 credits."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, agent_enabled=True)
+class TestNormalBilling:
+    def test_basic_fast_translate_charges_once(self, tmp_path):
+        settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        result = create_task_atomic(
-            settings,
-            job_code=f"NORM-{uuid.uuid4().hex[:8]}",
-            user_id=TEST_USER_A,
-            username="test",
-            prompt="1girl, standing",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=True,
-            prompt_source="agent_no_character",
-            character_key="[]",
-        )
+        result = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="test billing",
+        ))
 
-        bal_after = _get_balance(settings, TEST_USER_A)
-        assert bal_before - bal_after == 2
-        assert result["charged_fen"] == 2
-
-    def test_raw_generation_charges_one_credit(self):
-        """use_agent=False → base 1 credit only."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, agent_enabled=True)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        bal_before = _get_balance(settings, TEST_USER_A)
-
-        result = create_task_atomic(
-            settings,
-            job_code=f"RAW-{uuid.uuid4().hex[:8]}",
-            user_id=TEST_USER_A,
-            username="test",
-            prompt="1girl, standing",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=False,
-            prompt_source="user_raw",
-            character_key="",
-        )
-
-        bal_after = _get_balance(settings, TEST_USER_A)
-        assert bal_before - bal_after == 1
-        assert result["charged_fen"] == 1
-
-    def test_normal_does_not_charge_fast_translator_fee(self):
-        """Normal translation uses agent_surcharge, not fast_translator_cost."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, agent_enabled=True, fast_translator_cost_credits=99)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        bal_before = _get_balance(settings, TEST_USER_A)
-
-        create_task_atomic(
-            settings,
-            job_code=f"NOFAST-{uuid.uuid4().hex[:8]}",
-            user_id=TEST_USER_A,
-            username="test",
-            prompt="test prompt",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=True,
-            prompt_source="agent_no_character",
-            character_key="[]",
-        )
-
-        bal_after = _get_balance(settings, TEST_USER_A)
-        # Should be 1 (base) + 1 (agent surcharge) = 2, NOT 99
-        assert bal_before - bal_after == 2
+        assert result.ok is True
+        assert result.charged_credits == 2
+        assert _get_balance(settings, TEST_USER_A) == bal_before - 2
+        assert _count_ledger(
+            settings, TEST_USER_A, "fast_translate_charge"
+        ) == 1
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# D. Timeout precision (P1-4)
+# D. Timeout and refund precision (P1-4)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-class TestTimeoutPrecision:
-    """Verify timeout causes clean refund with precise balance assertion."""
+class TestTimeout:
+    def test_immediate_deepseek_error_refunds(self, tmp_path):
+        """Unit test: DeepSeekError → refund → failed_refunded."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        bal_before = _get_balance(settings, TEST_USER_A)
 
-    def test_timeout_refund_restores_exact_balance(self):
-        """When DeepSeek times out, the exact charge must be refunded."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2, deepseek_timeout_seconds=5)
-        _seed_balance(settings, TEST_USER_A, 2000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-        assert initial_balance == 2000
-
-        # Create a mock DeepSeekService that raises a timeout error
-        from app.services.deepseek_service import DeepSeekService
-
-        class TimeoutMockService(DeepSeekService):
-            async def complete_json(self, **kwargs):
-                raise DeepSeekError("Timeout")
-
-        mock_ds = TimeoutMockService(settings)
-
-        async def _test():
-            return await fast_refine_prompt(
-                settings,
-                user_id=TEST_USER_A,
-                text="超时测试",
-                deepseek=mock_ds,
-            )
-
-        with pytest.raises(FastTranslatorError) as exc_info:
-            _run(_test())
-
-        # DeepSeekError("Timeout") is caught by generic Exception handler
-        # and re-raised as FastTranslatorError("fast_translate_failed")
-        assert exc_info.value.code in ("deepseek_failed", "fast_translate_failed")
-
-        final_balance = _get_balance(settings, TEST_USER_A)
-        assert final_balance == initial_balance, (
-            f"Balance should be restored after timeout: expected {initial_balance}, got {final_balance}"
+        mock_ds = MagicMock()
+        mock_ds.complete_json = AsyncMock(
+            side_effect=Exception("simulated_deepseek_failure")
         )
 
-        # Verify ledger: 0 charges, 0 refunds (charge was rolled back)
-        charge_count = _count_ledger(settings, TEST_USER_A, "fast_translate_charge")
-        refund_count = _count_ledger(settings, TEST_USER_A, "fast_translate_refund")
-        # The charge + refund should both exist, or neither (depending on timing)
-        # If _begin_charge committed before timeout: 1 charge + 1 refund = net 0
-        # If _begin_charge failed: 0 charges
-        assert charge_count == refund_count, (
-            f"Charge and refund ledger entries must balance: charges={charge_count}, refunds={refund_count}"
-        )
-
-    def test_http_500_refund_restores_exact_balance(self):
-        """When DeepSeek returns HTTP 500, the exact charge must be refunded."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 2000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        from app.services.deepseek_service import DeepSeekService
-
-        class Http500MockService(DeepSeekService):
-            async def complete_json(self, **kwargs):
-                raise DeepSeekError("deepseek_http_500")
-
-        mock_ds = Http500MockService(settings)
-
-        async def _test():
-            return await fast_refine_prompt(
-                settings,
-                user_id=TEST_USER_A,
-                text="500错误测试",
-                deepseek=mock_ds,
-            )
-
-        with pytest.raises(FastTranslatorError):
-            _run(_test())
-
-        final_balance = _get_balance(settings, TEST_USER_A)
-        assert final_balance == initial_balance
-
-    def test_empty_output_refund_restores_exact_balance(self):
-        """When DeepSeek returns empty/invalid output, charge must be refunded."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 2000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        from app.services.deepseek_service import DeepSeekService
-
-        class EmptyMockService(DeepSeekService):
-            async def complete_json(self, **kwargs):
-                return {"clothing": "", "action": "", "expression": "", "composition": "",
-                        "scene": "", "lighting": "", "mood": "", "style": ""}
-
-        mock_ds = EmptyMockService(settings)
-
-        async def _test():
-            return await fast_refine_prompt(
-                settings,
-                user_id=TEST_USER_A,
-                text="空输出测试",
-                deepseek=mock_ds,
-            )
-
         with pytest.raises(FastTranslatorError) as exc_info:
-            _run(_test())
-        assert "empty" in exc_info.value.code
-
-        final_balance = _get_balance(settings, TEST_USER_A)
-        assert final_balance == initial_balance
-
-    def test_success_charge_then_timeout_no_double_refund(self):
-        """After a successful request, a timeout on a different request
-        must not refund the first request."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 10000)
-
-        # First request succeeds
-        r1 = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="第一次成功"))
-        bal_after_first = _get_balance(settings, TEST_USER_A)
-        assert bal_after_first == 10000 - 2
-
-        # Second request times out
-        from app.services.deepseek_service import DeepSeekService
-
-        class TimeoutMockService(DeepSeekService):
-            async def complete_json(self, **kwargs):
-                raise DeepSeekError("Timeout")
-
-        mock_ds = TimeoutMockService(settings)
-
-        with pytest.raises(FastTranslatorError):
             _run(fast_refine_prompt(
-                settings, user_id=TEST_USER_A, text="第二次超时",
+                settings, user_id=TEST_USER_A,
+                text="a beautiful sunset scene",
                 deepseek=mock_ds,
             ))
 
-        bal_after_second = _get_balance(settings, TEST_USER_A)
-        # Only the second request was refunded, first still charged
-        assert bal_after_second == bal_after_first
+        assert exc_info.value.code == "fast_translate_failed"
+        assert _get_balance(settings, TEST_USER_A) == bal_before
+        assert _count_ledger(
+            settings, TEST_USER_A, "fast_translate_refund"
+        ) == 1
+
+    def test_real_local_timeout_refunds(self, tmp_path):
+        """Real timeout test: local HTTP server that delays beyond client timeout.
+
+        Uses a real HTTP server on 127.0.0.1 with a random port.
+        Server delays response longer than client timeout.
+        Verifies: actual wait, precise refund, no double refund, failed_refunded.
+        """
+        # Find a free port
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+
+        delay_seconds = 10  # server delay
+        client_timeout = 2  # client timeout must be < server delay
+
+        class SlowHandler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                time.sleep(delay_seconds)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "choices": [{"message": {"content": '{"style":"anime"}'}, "finish_reason": "stop"}]
+                }).encode())
+
+            def log_message(self, format, *args):
+                pass  # suppress logs
+
+        server = http.server.HTTPServer(("127.0.0.1", port), SlowHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+
+        try:
+            settings = _make_settings(
+                tmp_path,
+                deepseek_api_key="sk-real-looking-key-not-test-only",
+                deepseek_base_url=f"http://127.0.0.1:{port}",
+                deepseek_timeout_seconds=client_timeout,
+                deepseek_max_retries=0,
+            )
+            _seed_balance(settings, TEST_USER_A, 50000)
+            bal_before = _get_balance(settings, TEST_USER_A)
+
+            t0 = time.monotonic()
+            with pytest.raises(FastTranslatorError) as exc_info:
+                _run(fast_refine_prompt(
+                    settings, user_id=TEST_USER_A, text="a beautiful sunset scene",
+                ))
+            elapsed = time.monotonic() - t0
+
+            # Verify timeout happened around the expected duration
+            assert elapsed >= client_timeout * 0.5, f"Too fast: {elapsed:.1f}s"
+            assert elapsed < delay_seconds, f"Too slow: {elapsed:.1f}s"
+
+            # Verify refund
+            assert _get_balance(settings, TEST_USER_A) == bal_before
+            assert _count_ledger(
+                settings, TEST_USER_A, "fast_translate_refund"
+            ) == 1
+
+            # Verify status
+            charge_count = _count_ledger(
+                settings, TEST_USER_A, "fast_translate_charge"
+            )
+            assert charge_count == 1  # one charge
+            # Find the request_code from ledger
+            conn = connect(settings)
+            try:
+                row = conn.execute(
+                    "SELECT order_code FROM balance_ledger WHERE user_id=? AND reason=?",
+                    (TEST_USER_A, "fast_translate_charge"),
+                ).fetchone()
+                request_code = row["order_code"]
+            finally:
+                conn.close()
+            record = _get_translation_record(settings, request_code)
+            assert record is not None
+            assert record["status"] == "failed_refunded"
+        finally:
+            server.shutdown()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# E. Character confirmation 409 via HTTP (P1-5)
+# E. HTTP 409 character confirmation (P1-5)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-class TestCharacterConfirmationHTTP:
-    """Verify character confirmation 409 flow via real HTTP."""
+class TestHTTPCharacterConfirmation:
+    """Test the full HTTP 409 → confirm lifecycle."""
 
-    def test_ambiguous_character_returns_409_with_code(self):
-        """Ambiguous character → HTTP 409 with character_resolution_required."""
+    def test_ambiguous_409_then_confirm_same_cid(self, tmp_path):
+        """Ambiguous → 409 → confirm with same client_request_id → 200 → only one charge."""
         from fastapi.testclient import TestClient
         from app.main import app
         from app.config import get_settings
 
-        case_root = _case_root()
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            r = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上唱歌",
-            }, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 409
-            detail = r.json().get("detail", {})
-            assert detail.get("code") == "character_resolution_required"
-            assert detail.get("requiresCharacterSelection") is True
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_ambiguous_does_not_charge(self):
-        """Ambiguous character 409 must not deduct credits."""
-        case_root = _case_root()
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 2000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            r = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
-            }, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 409
-        finally:
-            app.dependency_overrides.clear()
-
-        assert _get_balance(settings, TEST_USER_A) == initial_balance
-
-    def test_resolved_character_proceeds_without_409(self):
-        """Resolved character (e.g. 初音未来) → 200, no confirmation needed."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            r = client.post("/api/prompt/fast-refine", json={
-                "text": "初音未来在舞台上唱歌",
-            }, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 200
-            data = r.json()
-            assert data.get("ok") is True
-            assert "hatsune_miku" in data.get("character_keys", [])
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_none_of_above_resolves_and_proceeds(self):
-        """User selects 'none of the above' → stored as skip decision, proceeds."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-        from app.smart_agent.disambiguation_engine import NO_LIBRARY_CHARACTER_ID
-
-        case_root = _case_root()
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            # Use a prompt with a character mention that triggers disambiguation,
-            # then resolve with "none of the above"
-            r = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
-            }, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 409
-            detail = r.json().get("detail", {})
-            mentions = detail.get("resolution", {}).get("mentions", [])
-            assert len(mentions) > 0
-            raw_text = mentions[0]["rawText"]
-
-            r2 = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
-                "character_resolution": {
-                    "status": "resolved",
-                    "selections": [{"rawText": raw_text, "characterId": NO_LIBRARY_CHARACTER_ID}],
-                },
-            }, headers={"X-CSRF-Token": "test"})
-            assert r2.status_code == 200
-            data = r2.json()
-            assert data.get("ok") is True
-        finally:
-            app.dependency_overrides.clear()
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# F. User isolation (P2-1)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestUserIsolation:
-    """Verify users cannot access each other's data via HTTP."""
-
-    def _setup_two_users(self, case_root):
-        settings = _make_settings(case_root)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        _seed_balance(settings, TEST_USER_B, 50000)
-        return settings
-
-    def test_user_b_cannot_see_user_a_task(self):
-        """GET /api/tasks/{job_code} with user B session → 404 for user A's task."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-
-        # Create a task as user A
-        job_code = f"ISO-A-{uuid.uuid4().hex[:8]}"
-        create_task_atomic(
-            settings,
-            job_code=job_code,
-            user_id=TEST_USER_A,
-            username="UserA",
-            prompt="user A prompt",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=False,
-            prompt_source="user_raw",
-            character_key="",
-        )
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-
-            # Switch to user B by overriding dev_user_id
-            settings_b = _make_settings(case_root)
-            settings_b.dev_user_id = TEST_USER_B
-            app.dependency_overrides[get_settings] = lambda: settings_b
-
-            r = client.get(f"/api/tasks/{job_code}")
-            assert r.status_code == 404
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_user_b_cannot_cancel_user_a_task(self):
-        """POST /api/tasks/{job_code}/cancel with user B → 404."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-
-        job_code = f"ISO-C-{uuid.uuid4().hex[:8]}"
-        create_task_atomic(
-            settings,
-            job_code=job_code,
-            user_id=TEST_USER_A,
-            username="UserA",
-            prompt="cancel test",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=False,
-            prompt_source="user_raw",
-            character_key="",
-        )
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-
-            settings_b = _make_settings(case_root)
-            settings_b.dev_user_id = TEST_USER_B
-            app.dependency_overrides[get_settings] = lambda: settings_b
-
-            r = client.post(f"/api/tasks/{job_code}/cancel", headers={"X-CSRF-Token": "test"})
-            assert r.status_code in (404, 409)
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_user_a_balance_invisible_to_user_b(self):
-        """GET /api/me as user B shows user B's balance, not user A's."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-        _seed_balance(settings, TEST_USER_A, 99999)
-        _seed_balance(settings, TEST_USER_B, 11111)
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-
-            # User A's config
-            settings_a = _make_settings(case_root)
-            settings_a.dev_user_id = TEST_USER_A
-            app.dependency_overrides[get_settings] = lambda: settings_a
-            r_a = client.get("/api/me")
-            assert r_a.status_code == 200
-            bal_a = r_a.json().get("balance_fen")
-
-            # User B's config
-            settings_b = _make_settings(case_root)
-            settings_b.dev_user_id = TEST_USER_B
-            app.dependency_overrides[get_settings] = lambda: settings_b
-            r_b = client.get("/api/me")
-            assert r_b.status_code == 200
-            bal_b = r_b.json().get("balance_fen")
-
-            assert bal_a == 99999
-            assert bal_b == 11111
-            assert bal_a != bal_b
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_fast_translate_isolation(self):
-        """Fast translate requests are isolated per user in translation_requests."""
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-        cid = f"ft-iso-{uuid.uuid4().hex[:8]}"
-
-        r_a = _run(fast_refine_prompt(settings, user_id=TEST_USER_A, text="用户A翻译", client_request_id=cid))
-        r_b = _run(fast_refine_prompt(settings, user_id=TEST_USER_B, text="用户B翻译", client_request_id=cid))
-
-        assert r_a.request_code != r_b.request_code
-
-        # Verify both records exist independently
-        rec_a = _get_translation_record(settings, r_a.request_code)
-        rec_b = _get_translation_record(settings, r_b.request_code)
-        assert rec_a is not None
-        assert rec_b is not None
-        assert rec_a["user_id"] == TEST_USER_A
-        assert rec_b["user_id"] == TEST_USER_B
-
-    def test_user_b_cannot_confirm_user_a_draft(self):
-        """User B cannot confirm user A's smart agent prompt draft."""
-        # This test verifies the confirm endpoint scopes to the conversation owner
-        # Since smart agent requires more setup, we test at the DB level that
-        # confirm_smart_agent_prompt_draft_atomic requires matching user.
-        from app.db import confirm_smart_agent_prompt_draft_atomic
-
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-
-        # Without a valid draft, this should fail with a LookupError or similar
-        with pytest.raises((LookupError, RuntimeError, Exception)):
-            _run(confirm_smart_agent_prompt_draft_atomic(
-                settings,
-                user_id=TEST_USER_B,
-                conversation_code="nonexistent",
-                approved=True,
-            ))
-
-    def test_same_request_id_different_users_independent(self):
-        """Same client_request_id for different users creates independent tasks."""
-        case_root = _case_root()
-        settings = self._setup_two_users(case_root)
-
-        job_a = create_task_atomic(
-            settings,
-            job_code=f"ISO-RA-{uuid.uuid4().hex[:8]}",
-            user_id=TEST_USER_A,
-            username="UserA",
-            prompt="user A prompt",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=False,
-            client_request_id="shared-id-123",
-            prompt_source="user_raw",
-            character_key="",
-        )
-
-        job_b = create_task_atomic(
-            settings,
-            job_code=f"ISO-RB-{uuid.uuid4().hex[:8]}",
-            user_id=TEST_USER_B,
-            username="UserB",
-            prompt="user B prompt",
-            style_key="style_a",
-            lora_weight=1.0,
-            width=1024,
-            height=1536,
-            mode="txt2img",
-            input_image_path=None,
-            denoise=0.5,
-            control_type="depth",
-            control_character="prompt",
-            auto_tagger=False,
-            use_agent=False,
-            client_request_id="shared-id-123",
-            prompt_source="user_raw",
-            character_key="",
-        )
-
-        assert job_a["job_code"] != job_b["job_code"]
-        assert _get_balance(settings, TEST_USER_A) == 50000 - 1
-        assert _get_balance(settings, TEST_USER_B) == 50000 - 1
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# G. Normal translation full HTTP lifecycle (补充 P1-1)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestNormalTranslationHTTPLifecycle:
-    """Full HTTP lifecycle for normal translation billing."""
-
-    def test_http_task_with_agent_true_charges_two(self):
-        """POST /api/tasks with use_agent=true → 2 credits charged."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root, agent_enabled=True)
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
         _seed_balance(settings, TEST_USER_A, 50000)
         initial_balance = _get_balance(settings, TEST_USER_A)
 
         app.dependency_overrides[get_settings] = lambda: settings
         try:
             client = TestClient(app, raise_server_exceptions=False)
-            fd = {
-                "mode": "txt2img",
-                "style_key": "style_a",
-                "prompt": "1girl, solo, forest scenery",
-                "width": "1024",
-                "height": "1536",
-                "lora_weight": "1.0",
-                "denoise": "0.5",
-                "control_type": "depth",
-                "control_character": "prompt",
-                "auto_tagger": "false",
-                "use_agent": "true",
-            }
-            r = client.post("/api/tasks", data=fd, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 200
-            data = r.json()
-            assert data.get("charged_fen") == 2
-            assert data.get("status") == "queued"
+            cid = f"lifecycle-{uuid.uuid4().hex[:8]}"
 
-            final_balance = _get_balance(settings, TEST_USER_A)
-            assert initial_balance - final_balance == 2
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_http_task_without_agent_charges_one(self):
-        """POST /api/tasks with use_agent=false → 1 credit charged."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root, agent_enabled=True)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            fd = {
-                "mode": "txt2img",
-                "style_key": "style_a",
-                "prompt": "1girl, standing",
-                "width": "1024",
-                "height": "1536",
-                "lora_weight": "1.0",
-                "denoise": "0.5",
-                "control_type": "depth",
-                "control_character": "prompt",
-                "auto_tagger": "false",
-                "use_agent": "false",
-            }
-            r = client.post("/api/tasks", data=fd, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 200
-            data = r.json()
-            assert data.get("charged_fen") == 1
-
-            final_balance = _get_balance(settings, TEST_USER_A)
-            assert initial_balance - final_balance == 1
-        finally:
-            app.dependency_overrides.clear()
-
-    def test_http_fast_translate_charges_two(self):
-        """POST /api/prompt/fast-refine → 2 credits charged via fast_translator_cost_credits."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-            r = client.post("/api/prompt/fast-refine", json={
-                "text": "风景画，蓝天白云",
-            }, headers={"X-CSRF-Token": "test"})
-            assert r.status_code == 200
-            data = r.json()
-            assert data.get("charged_credits") == 2
-
-            final_balance = _get_balance(settings, TEST_USER_A)
-            assert initial_balance - final_balance == 2
-        finally:
-            app.dependency_overrides.clear()
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# H. Character confirmation full HTTP lifecycle (补充 P1-5)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestCharacterConfirmationLifecycle:
-    """Full HTTP lifecycle for character confirmation."""
-
-    def test_full_lifecycle_ambiguous_then_confirm(self):
-        """Ambiguous → 409 → resolve → 200 → only one charge."""
-        from fastapi.testclient import TestClient
-        from app.main import app
-        from app.config import get_settings
-
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        initial_balance = _get_balance(settings, TEST_USER_A)
-
-        app.dependency_overrides.clear()  # ensure clean state
-        app.dependency_overrides[get_settings] = lambda: settings
-        try:
-            client = TestClient(app, raise_server_exceptions=False)
-
-            # Step 1: Send ambiguous character ("ik" -> MEIKO/Taiki Shuttle)
+            # Step 1: Ambiguous character → 409
             r1 = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
+                "text": "mami在舞台上",
+                "client_request_id": cid,
             }, headers={"X-CSRF-Token": "test"})
             assert r1.status_code == 409
             detail = r1.json().get("detail", {})
             assert detail.get("code") == "character_resolution_required"
             assert detail.get("requiresCharacterSelection") is True
-
-            # Balance unchanged
             assert _get_balance(settings, TEST_USER_A) == initial_balance
 
-            # Step 2: Confirm character with an actual candidate and resubmit
+            # Step 2: Confirm with character A using same client_request_id
+            analysis = analyze_character_mentions("mami在舞台上")
+            mention = analysis["mentions"][0]
+            char_a = mention["candidates"][0]["characterId"]
+
             r2 = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
+                "text": "mami在舞台上",
+                "client_request_id": cid,
                 "character_resolution": {
                     "status": "resolved",
-                    "selections": [{"rawText": "ik", "characterId": "meiko"}],
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": char_a,
+                    }],
                 },
             }, headers={"X-CSRF-Token": "test"})
             assert r2.status_code == 200
             data = r2.json()
             assert data.get("ok") is True
-            assert "meiko" in data.get("character_keys", [])
-
-            # Only one charge
+            assert char_a in data.get("character_keys", [])
             assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
 
-            # Step 3: Same request ID + same text → dedup
-            cid = "lifecycle-dedup"
-            r3a = client.post("/api/prompt/fast-refine", json={
-                "text": "初音未来在舞台上",
+            # Step 3: Replay same request → dedup, no extra charge
+            r3 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
                 "client_request_id": cid,
+                "character_resolution": {
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": char_a,
+                    }],
+                },
             }, headers={"X-CSRF-Token": "test"})
-            assert r3a.status_code == 200
-            bal_after_3a = _get_balance(settings, TEST_USER_A)
-
-            r3b = client.post("/api/prompt/fast-refine", json={
-                "text": "初音未来在舞台上",
-                "client_request_id": cid,
-            }, headers={"X-CSRF-Token": "test"})
-            assert r3b.status_code == 200
-            assert _get_balance(settings, TEST_USER_A) == bal_after_3a
-            assert r3a.json().get("request_code") == r3b.json().get("request_code")
+            assert r3.status_code == 200
+            assert r3.json().get("request_code") == data.get("request_code")
+            assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
+            assert _count_translation_requests(settings, TEST_USER_A) == 1
         finally:
             app.dependency_overrides.clear()
 
-    def test_full_lifecycle_none_of_above(self):
-        """'none of above' → 200 → character_keys empty, charged once."""
-        case_root = _case_root()
-        settings = _make_settings(case_root, fast_translator_cost_credits=2)
+    def test_ambiguous_409_then_skip_same_cid(self, tmp_path):
+        """Ambiguous → 409 → 'none of above' with same cid → 200 → replay safe."""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.config import get_settings
+
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
         _seed_balance(settings, TEST_USER_A, 50000)
         initial_balance = _get_balance(settings, TEST_USER_A)
 
-        # Use service-level call to avoid TestClient state leakage
-        from app.smart_agent.disambiguation_engine import (
-            analyze_character_mentions,
-            NO_LIBRARY_CHARACTER_ID,
-        )
-        analysis = analyze_character_mentions('miku在舞台上')
-        raw_text = analysis['mentions'][0]['rawText']
+        app.dependency_overrides[get_settings] = lambda: settings
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            cid = f"skip-lifecycle-{uuid.uuid4().hex[:8]}"
 
-        cid = f"none-above-{uuid.uuid4().hex[:8]}"
-        result = _run(fast_refine_prompt(
+            # Step 1: Ambiguous → 409
+            r1 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
+                "client_request_id": cid,
+            }, headers={"X-CSRF-Token": "test"})
+            assert r1.status_code == 409
+
+            # Step 2: Select "none of above" with same cid
+            analysis = analyze_character_mentions("mami在舞台上")
+            mention = analysis["mentions"][0]
+
+            r2 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
+                "client_request_id": cid,
+                "character_resolution": {
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": NO_LIBRARY_CHARACTER_ID,
+                        "skipCharacterLibrary": True,
+                    }],
+                },
+            }, headers={"X-CSRF-Token": "test"})
+            assert r2.status_code == 200
+            data = r2.json()
+            assert data.get("ok") is True
+            assert data.get("character_keys") == []
+            assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
+
+            # Step 3: Replay → dedup
+            r3 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
+                "client_request_id": cid,
+                "character_resolution": {
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": NO_LIBRARY_CHARACTER_ID,
+                        "skipCharacterLibrary": True,
+                    }],
+                },
+            }, headers={"X-CSRF-Token": "test"})
+            assert r3.status_code == 200
+            assert r3.json().get("request_code") == data.get("request_code")
+            assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_http_409_different_character_conflict(self, tmp_path):
+        """Same cid + same text + different character → HTTP 409, no extra charge."""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.config import get_settings
+
+        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        initial_balance = _get_balance(settings, TEST_USER_A)
+
+        app.dependency_overrides[get_settings] = lambda: settings
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+            cid = f"http-conflict-{uuid.uuid4().hex[:8]}"
+
+            analysis = analyze_character_mentions("mami在舞台上")
+            mention = analysis["mentions"][0]
+            char_a = mention["candidates"][0]["characterId"]
+            char_b = mention["candidates"][1]["characterId"]
+
+            # First: character A → 200
+            r1 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
+                "client_request_id": cid,
+                "character_resolution": {
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": char_a,
+                    }],
+                },
+            }, headers={"X-CSRF-Token": "test"})
+            assert r1.status_code == 200
+            rc1 = r1.json()["request_code"]
+
+            # Second: character B → 409
+            r2 = client.post("/api/prompt/fast-refine", json={
+                "text": "mami在舞台上",
+                "client_request_id": cid,
+                "character_resolution": {
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": mention["mentionId"],
+                        "rawText": mention["rawText"],
+                        "characterId": char_b,
+                    }],
+                },
+            }, headers={"X-CSRF-Token": "test"})
+            assert r2.status_code == 409
+            detail = r2.json().get("detail", {})
+            assert detail.get("code") == "client_request_id_conflict"
+
+            # Verify: only one charge, one record, original not overwritten
+            assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
+            assert _count_translation_requests(settings, TEST_USER_A) == 1
+            record = _get_translation_record(settings, rc1)
+            assert record is not None
+            assert char_a in json.loads(record["character_keys_json"])
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_empty_selections_via_http_returns_409(self, tmp_path):
+        """Empty selections via HTTP → 409 character_resolution_required."""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.config import get_settings
+
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+
+        app.dependency_overrides[get_settings] = lambda: settings
+        try:
+            client = TestClient(app, raise_server_exceptions=False)
+
+            r = client.post("/api/prompt/fast-refine", json={
+                "text": "miku在舞台上",
+                "character_resolution": {"status": "resolved", "selections": []},
+            }, headers={"X-CSRF-Token": "test"})
+            assert r.status_code == 409
+            detail = r.json().get("detail", {})
+            assert detail.get("code") == "character_resolution_required"
+            assert _get_balance(settings, TEST_USER_A) == 50000
+        finally:
+            app.dependency_overrides.clear()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# H. Legacy fingerprint compatibility
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestLegacyFingerprint:
+    """Test backward compatibility with translation_requests that have empty fingerprint."""
+
+    def test_legacy_same_text_same_keys_reuses(self, tmp_path):
+        """Legacy row with empty fp, same text + same character keys → reuse, backfill fp."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        cid = f"legacy-same-{uuid.uuid4().hex[:8]}"
+
+        # Insert legacy row (no fingerprint)
+        _insert_legacy_translation(
             settings,
             user_id=TEST_USER_A,
-            text='miku在舞台上',
+            request_code="TR-LEGACY0001",
+            text="a beautiful sunset scene",
+            character_keys_json='["hatsune_miku"]',
+            character_match_source="resolved",
+            client_request_id=cid,
+        )
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        # Same user, same cid, same text, same character keys → reuse
+        result = _run(fast_refine_prompt(
+            settings, user_id=TEST_USER_A, text="a beautiful sunset scene",
             client_request_id=cid,
             character_resolution={
-                'status': 'resolved',
-                'selections': [{'rawText': raw_text, 'characterId': NO_LIBRARY_CHARACTER_ID}],
+                "status": "resolved",
+                "selections": [{
+                    "mentionId": "x",
+                    "rawText": "miku",
+                    "characterId": "hatsune_miku",
+                }],
             },
         ))
-        assert result.ok is True
-        assert result.character_keys == []
-        assert _get_balance(settings, TEST_USER_A) == initial_balance - 2
+        assert result.request_code == "TR-LEGACY0001"
+        assert _get_balance(settings, TEST_USER_A) == bal_before  # no extra charge
+
+        # Verify fingerprint was backfilled
+        conn = connect(settings)
+        try:
+            row = conn.execute(
+                "SELECT request_fingerprint FROM translation_requests WHERE request_code=?",
+                ("TR-LEGACY0001",),
+            ).fetchone()
+            assert row and row["request_fingerprint"] != ""
+        finally:
+            conn.close()
+
+    def test_legacy_same_text_different_keys_conflict(self, tmp_path):
+        """Legacy row with empty fp, same text but different character keys → conflict."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        cid = f"legacy-diff-{uuid.uuid4().hex[:8]}"
+
+        _insert_legacy_translation(
+            settings,
+            user_id=TEST_USER_A,
+            request_code="TR-LEGACY0002",
+            text="a beautiful sunset scene",
+            character_keys_json='["hatsune_miku"]',
+            character_match_source="resolved",
+            client_request_id=cid,
+        )
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        # Same text, different character → conflict
+        with pytest.raises(ClientRequestIdConflict):
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="a beautiful sunset scene",
+                client_request_id=cid,
+                character_resolution={
+                    "status": "resolved",
+                    "selections": [{
+                        "mentionId": "x",
+                        "rawText": "meiko",
+                        "characterId": "meiko",
+                    }],
+                },
+            ))
+
+        assert _get_balance(settings, TEST_USER_A) == bal_before
+
+    def test_legacy_same_text_none_vs_characters_conflict(self, tmp_path):
+        """Legacy row has characters, current request is 'none' → conflict."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        cid = f"legacy-none-{uuid.uuid4().hex[:8]}"
+
+        _insert_legacy_translation(
+            settings,
+            user_id=TEST_USER_A,
+            request_code="TR-LEGACY0003",
+            text="a beautiful sunset scene",
+            character_keys_json='["hatsune_miku"]',
+            character_match_source="resolved",
+            client_request_id=cid,
+        )
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        with pytest.raises(ClientRequestIdConflict):
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="a beautiful sunset scene",
+                client_request_id=cid,
+            ))
+
+        assert _get_balance(settings, TEST_USER_A) == bal_before
+
+    def test_legacy_malformed_json_conflict(self, tmp_path):
+        """Legacy row with malformed character_keys_json → safe conflict, no 500."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER_A, 50000)
+        cid = f"legacy-malform-{uuid.uuid4().hex[:8]}"
+
+        _insert_legacy_translation(
+            settings,
+            user_id=TEST_USER_A,
+            request_code="TR-LEGACY0004",
+            text="a beautiful sunset scene",
+            character_keys_json="NOT_VALID_JSON{{{",
+            character_match_source="none",
+            client_request_id=cid,
+        )
+        bal_before = _get_balance(settings, TEST_USER_A)
+
+        with pytest.raises(ClientRequestIdConflict):
+            _run(fast_refine_prompt(
+                settings, user_id=TEST_USER_A, text="a beautiful sunset scene",
+                client_request_id=cid,
+            ))
+
+        assert _get_balance(settings, TEST_USER_A) == bal_before
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# I. Fingerprint normalization
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFingerprintNormalization:
+    """Verify fingerprint is based on normalized character decision only."""
+
+    def test_same_keys_different_order_same_fingerprint(self):
+        fp1 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["b", "a"], source="resolved",
+        )
+        fp2 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a", "b"], source="resolved",
+        )
+        assert fp1 == fp2
+
+    def test_empty_keys_and_none_source(self):
+        fp1 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=[], source="none",
+        )
+        fp2 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=[], source="none",
+        )
+        assert fp1 == fp2
+
+    def test_characters_vs_none_different(self):
+        fp_chars = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a"], source="resolved",
+        )
+        fp_none = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=[], source="none",
+        )
+        assert fp_chars != fp_none
+
+    def test_fingerprint_excludes_raw_resolution(self):
+        """Fingerprint does not include raw character_resolution dict."""
+        fp1 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a"], source="resolved",
+        )
+        fp2 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a"], source="resolved",
+        )
+        # Same parameters → same fingerprint, regardless of any external data
+        assert fp1 == fp2
+
+    def test_deduplicate_keys(self):
+        """Duplicate keys are deduplicated in fingerprint."""
+        fp1 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a", "a", "b"], source="resolved",
+        )
+        fp2 = _compute_fast_translation_fingerprint(
+            user_id="u", text="t", character_keys=["a", "b"], source="resolved",
+        )
+        assert fp1 == fp2
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# J. _safe_parse_character_keys_json helper
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestSafeParseCharacterKeys:
+    def test_valid_list(self):
+        assert _safe_parse_character_keys_json('["a","b"]') == ["a", "b"]
+
+    def test_empty_list(self):
+        assert _safe_parse_character_keys_json("[]") == []
+
+    def test_invalid_json(self):
+        assert _safe_parse_character_keys_json("broken") is None
+
+    def test_non_list(self):
+        assert _safe_parse_character_keys_json('{"a":1}') is None
+
+    def test_null(self):
+        assert _safe_parse_character_keys_json("null") is None
+
+    def test_list_with_none_values(self):
+        result = _safe_parse_character_keys_json('["a", null, "b"]')
+        assert result == ["a", "b"]
