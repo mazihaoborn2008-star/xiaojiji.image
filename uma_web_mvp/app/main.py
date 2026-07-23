@@ -62,6 +62,7 @@ from .db import (
     create_conversation,
     create_feedback_report,
     create_fast_translation_task_atomic,
+    compute_generation_fingerprint,
     create_smart_agent_queued_task_atomic,
     create_smart_agent_task_atomic,
     create_task_atomic,
@@ -5921,11 +5922,13 @@ def clear_conversation_memory(
     return {"ok": True}
 
 
-async def _save_upload(s: Settings, upload: UploadFile, job_code: str) -> str:
+async def _save_upload(s: Settings, upload: UploadFile, job_code: str) -> tuple[str, str]:
+    """Save uploaded image and return (path, content_sha256)."""
     raw = await upload.read(s.max_input_image_bytes + 1)
     await upload.close()
     if len(raw) > s.max_input_image_bytes:
         raise HTTPException(status_code=413, detail="图片超过 12MB")
+    content_hash = hashlib.sha256(raw).hexdigest()
     try:
         image = Image.open(io.BytesIO(raw))
         image.verify()
@@ -5942,7 +5945,7 @@ async def _save_upload(s: Settings, upload: UploadFile, job_code: str) -> str:
 
     target = s.input_image_dir / f"{job_code}.png"
     image.save(target, format="PNG", optimize=True)
-    return str(target)
+    return str(target), content_hash
 
 
 def _assemble_multi_character_prompt(
@@ -6079,7 +6082,7 @@ async def create_task(
     original_prompt: str | None = Form(default=None),
     prompt_source: str | None = Form(default=None),
     fast_translation_request_code: str | None = Form(default=None),
-    translation_mode: str = Form("none"),
+    translation_mode: str = Form("none"),  # accepted but server decides the real mode
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6092,6 +6095,17 @@ async def create_task(
         width, height = validate_resolution(width, height)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # ── Block legacy fast_translation_request_code binding ──
+    _legacy_ft_code = str(fast_translation_request_code or "").strip()
+    if _legacy_ft_code:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "legacy_fast_translation_binding_not_supported",
+                "message": "旧版极速翻译结果不能用于创建任务，请重新提交。",
+            },
+        )
 
     legacy_id = get_legacy_user_id_for_session(user, s)
     input_path = None
@@ -6108,55 +6122,37 @@ async def create_task(
 
         raw_prompt = (original_prompt or prompt or "").strip()
 
-        # Parse character resolution
-        char_keys: list[str] = []
-        char_decision = "none"
+        # Parse character resolution using strict shared logic
+        from .services.fast_translator_service import _resolve_characters, CharacterSelectionRequired, FastTranslatorError
+        resolution_obj = None
         if character_resolution:
             try:
-                res_obj = json.loads(character_resolution)
-                if isinstance(res_obj, dict):
-                    from .smart_agent.disambiguation_engine import validate_character_resolution, analyze_character_mentions
-                    try:
-                        validated = validate_character_resolution(raw_prompt, res_obj)
-                        char_keys = [
-                            str(item.get("characterId") or item.get("key") or "").strip()
-                            for item in validated.get("resolvedCharacters", []) or []
-                            if str(item.get("characterId") or item.get("key") or "").strip()
-                        ]
-                        char_keys = list(dict.fromkeys(char_keys))
-                        char_decision = "resolved" if char_keys else "none"
-                    except ValueError:
-                        pass
+                resolution_obj = json.loads(character_resolution)
+                if not isinstance(resolution_obj, dict):
+                    resolution_obj = None
             except (json.JSONDecodeError, TypeError):
-                pass
-        else:
-            # No resolution provided: analyze for ambiguity
-            from .smart_agent.disambiguation_engine import analyze_character_mentions
-            parsed = analyze_character_mentions(raw_prompt)
-            if parsed.get("status") in {"ambiguous", "mixed"}:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "ok": False,
-                        "code": "character_resolution_required",
-                        "message": "请选择具体人物后继续生成",
-                        "requiresCharacterSelection": True,
-                        "resolution": parsed,
-                        "characterResolution": parsed,
-                    },
-                )
-            # Auto-resolve from library
-            char_keys = [
-                str(item.get("characterId") or "").strip()
-                for item in parsed.get("resolvedCharacters", []) or []
-                if str(item.get("characterId") or "").strip()
-            ]
-            char_keys = list(dict.fromkeys(char_keys))
-            char_decision = "library" if char_keys else "none"
+                resolution_obj = None
+        try:
+            char_keys, char_decision = _resolve_characters(raw_prompt, resolution_obj)
+        except CharacterSelectionRequired as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "ok": False,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "requiresCharacterSelection": True,
+                    "resolution": exc.resolution,
+                    "characterResolution": exc.resolution,
+                },
+            ) from exc
+        except FastTranslatorError as exc:
+            raise HTTPException(status_code=400, detail={"code": exc.code, "message": exc.message}) from exc
 
         job_code = make_job_code()
+        input_content_hash = ""
         if input_image and input_image.filename:
-            input_path = await _save_upload(s, input_image, job_code)
+            input_path, input_content_hash = await _save_upload(s, input_image, job_code)
 
         safe_mock_result = ""
         if s.is_local_env() and s.dev_auth_bypass:
@@ -6187,6 +6183,7 @@ async def create_task(
                 client_request_id=client_request_id,
                 mock_result=safe_mock_result,
                 workflow_key=style_key,
+                input_image_stable_id=input_content_hash,
             )
             print(f"[WEB] created fast translation job={job_code} provider={user.provider} source=web")
             return result
@@ -6235,7 +6232,8 @@ async def create_task(
             # 限制最大长度
             if len(task_prompt) > 3000:
                 raise ValueError("prompt_too_long")
-            task_prompt_source = str(prompt_source or "").strip() or "user_raw"
+            # Server-authoritative: ignore client prompt_source
+            task_prompt_source = "user_raw"
             task_character_key = ""
         else:
             if not task_prompt:
@@ -6249,8 +6247,9 @@ async def create_task(
                 character_resolution,
             )
         job_code = make_job_code()
+        input_content_hash = ""
         if input_image and input_image.filename:
-            input_path = await _save_upload(s, input_image, job_code)
+            input_path, input_content_hash = await _save_upload(s, input_image, job_code)
         safe_mock_result = ""
         if s.is_local_env() and s.dev_auth_bypass:
             candidate = str(mock_result or "").strip().lower()
@@ -6277,6 +6276,40 @@ async def create_task(
                 limit=max(1, int(getattr(s, 'generation_submit_user_limit', 20) or 20)),
                 window_seconds=max(1, int(getattr(s, 'generation_submit_window_seconds', 60) or 60)),
             )
+        # Compute fingerprint for idempotency conflict detection
+        _char_keys_for_fp = []
+        if task_character_key:
+            try:
+                _ck = json.loads(task_character_key)
+                if isinstance(_ck, list):
+                    _char_keys_for_fp = [str(k) for k in _ck if k]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        _char_decision_for_fp = "none"
+        if task_prompt_source.startswith("agent_character_resolved"):
+            _char_decision_for_fp = "resolved"
+        elif task_prompt_source == "agent_no_character":
+            _char_decision_for_fp = "none"
+        elif task_prompt_source == "agent_character_no_library":
+            _char_decision_for_fp = "no_library"
+        _gen_fingerprint = compute_generation_fingerprint(
+            user_id=legacy_id,
+            original_prompt=(original_prompt or task_prompt),
+            translation_mode="none",
+            character_keys=_char_keys_for_fp,
+            character_resolution_decision=_char_decision_for_fp,
+            style_key=style_key,
+            width=width,
+            height=height,
+            lora_weight=float(lora_weight),
+            mode=mode,
+            denoise=float(denoise),
+            control_type=control_type,
+            control_character=control_character,
+            auto_tagger=bool(auto_tagger),
+            workflow_key=style_key,
+            input_image_stable_id=input_content_hash,
+        )
         result = create_task_atomic(
             s,
             job_code=job_code,
@@ -6299,7 +6332,7 @@ async def create_task(
             character_key=task_character_key,
             mock_result=safe_mock_result,
             original_prompt=(original_prompt or "").strip()[:3000] or None,
-            fast_translation_request_code=str(fast_translation_request_code or "").strip() or None,
+            request_fingerprint=_gen_fingerprint,
         )
         print(f"[WEB] created job={job_code} provider={user.provider} source=web")
         return result

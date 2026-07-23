@@ -28,7 +28,7 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        # Find a queued translation request with a translating generation task
+        # Find a queued OR stale-processing translation request with a translating generation task
         row = conn.execute(
             """
             SELECT tr.id AS tr_id, tr.request_code, tr.original_text,
@@ -37,12 +37,17 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
                    gt.job_code, gt.user_id, gt.status AS gt_status
             FROM translation_requests tr
             JOIN generation_tasks gt ON gt.fast_translation_request_code = tr.request_code
-            WHERE tr.status = 'queued'
-              AND gt.status = 'translating'
+            WHERE gt.status = 'translating'
               AND gt.fast_translation_request_code = tr.request_code
+              AND (
+                    (tr.status = 'queued')
+                    OR
+                    (tr.status = 'processing' AND tr.started_at < ? AND tr.attempt_count < ?)
+                  )
             ORDER BY tr.created_at ASC, tr.id ASC
             LIMIT 1
-            """
+            """,
+            (stale_before, FAST_TRANSLATION_MAX_RETRIES + 1),
         ).fetchone()
         if not row:
             conn.commit()
@@ -51,9 +56,9 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
         row_dict = dict(row)
         tr_id = row_dict["tr_id"]
 
-        # Mark as processing
+        # Mark as processing (works for both queued→processing and stale→reclaimed)
         conn.execute(
-            "UPDATE translation_requests SET status='processing', started_at=?, attempt_count=attempt_count+1 WHERE id=? AND status='queued'",
+            "UPDATE translation_requests SET status='processing', started_at=?, attempt_count=attempt_count+1 WHERE id=? AND status IN ('queued','processing')",
             (now, tr_id),
         )
         conn.commit()
@@ -61,6 +66,40 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+def _fail_stale_processing_tasks(settings: Settings, stale_before: int) -> int:
+    """Fail and refund translation tasks stuck in processing beyond max retries."""
+    conn = connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            "SELECT tr.id, tr.request_code, tr.generation_job_code "
+            "FROM translation_requests tr "
+            "WHERE tr.status = 'processing' AND tr.started_at < ? AND tr.attempt_count >= ?",
+            (stale_before, FAST_TRANSLATION_MAX_RETRIES + 1),
+        ).fetchall()
+        count = 0
+        for row in rows:
+            row_dict = dict(row)
+            job_code = str(row_dict.get("generation_job_code") or "")
+            if job_code:
+                try:
+                    fail_fast_translation_task_refund_atomic(
+                        settings,
+                        job_code=job_code,
+                        error_code="fast_translate_stale_max_retries",
+                    )
+                    count += 1
+                except Exception:
+                    pass
+        conn.commit()
+        return count
+    except Exception:
+        conn.rollback()
+        return 0
     finally:
         conn.close()
 
@@ -99,7 +138,7 @@ def complete_fast_translation(
             "effective_prompt=?, "
             "prompt_source=?, "
             "character_key=?, "
-            "created_at=? "
+            "queued_at=? "
             "WHERE job_code=? AND status='translating' AND fast_translation_request_code=?",
             (
                 final_prompt[:3000],
@@ -127,6 +166,8 @@ def complete_fast_translation(
 async def fast_translation_worker_loop(settings: Settings) -> None:
     """Main worker loop: poll for fast translation tasks and process them."""
     poll_interval = max(1, int(getattr(settings, "mock_worker_poll_seconds", 2)))
+    stale_cleanup_interval = 30  # seconds between stale cleanup runs
+    last_stale_cleanup = 0
     print("[FAST_TRANSLATION_WORKER] started", flush=True)
 
     while True:
@@ -134,6 +175,15 @@ async def fast_translation_worker_loop(settings: Settings) -> None:
             if not settings.fast_translator_enabled or not settings.deepseek_api_key:
                 await asyncio.sleep(5)
                 continue
+
+            now_ts = int(time.time())
+            # Periodically fail stale processing tasks that exceeded max retries
+            if now_ts - last_stale_cleanup >= stale_cleanup_interval:
+                stale_before = now_ts - FAST_TRANSLATION_CLAIM_TTL
+                cleaned = await asyncio.to_thread(_fail_stale_processing_tasks, settings, stale_before)
+                if cleaned:
+                    print(f"[FAST_TRANSLATION_WORKER] cleaned up {cleaned} stale processing tasks", flush=True)
+                last_stale_cleanup = now_ts
 
             task = await asyncio.to_thread(claim_next_fast_translation, settings)
             if not task:

@@ -1325,25 +1325,15 @@ class TestCancelRefundsAllFees:
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        # Create translation request (simulates fast-refine)
-        cid = f"cancel-full-{uuid.uuid4().hex[:8]}"
-        tr_result = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=cid,
-        ))
-        assert tr_result.ok is True
-        bal_after_translate = _get_balance(settings, TEST_USER_A)
-        assert bal_before - bal_after_translate == 2  # translation charged
-
-        # Create generation task with same client_request_id
-        from app.db import create_task_atomic
-        gen_result = create_task_atomic(
+        # Create fast translation task atomically (new flow)
+        from app.db import create_fast_translation_task_atomic, cancel_task_atomic
+        gen_result = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt="a beautiful sunset scene",
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -1354,16 +1344,12 @@ class TestCancelRefundsAllFees:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=False,
-            client_request_id=cid,
-            prompt_source="fast_translate",
         )
-        assert gen_result["status"] == "queued"
-        bal_after_gen = _get_balance(settings, TEST_USER_A)
-        assert bal_before - bal_after_gen == 4  # translate(2) + generate(2)
+        assert gen_result["status"] == "translating"
+        bal_after_create = _get_balance(settings, TEST_USER_A)
+        assert bal_before - bal_after_create == 4  # translate(2) + generate(2)
 
-        # Cancel - should refund BOTH
-        from app.db import cancel_task_atomic
+        # Cancel - should refund full bundled amount
         r = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
         refunded = r["refunded_fen"]
         assert refunded == 4  # generation(2) + translation(2)
@@ -1373,7 +1359,6 @@ class TestCancelRefundsAllFees:
 
         # Verify ledger entries
         assert _count_ledger(settings, TEST_USER_A, "generate_cancel_refund") == 1
-        assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 1
 
     def test_cancel_no_double_translation_refund(self, tmp_path):
         """Cancel twice does not double-refund translation fee."""
@@ -1381,20 +1366,14 @@ class TestCancelRefundsAllFees:
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        cid = f"no-double-{uuid.uuid4().hex[:8]}"
-        _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=cid,
-        ))
-
-        from app.db import create_task_atomic, cancel_task_atomic
-        gen_result = create_task_atomic(
+        from app.db import create_fast_translation_task_atomic, cancel_task_atomic
+        gen_result = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt="a beautiful sunset scene",
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -1405,9 +1384,6 @@ class TestCancelRefundsAllFees:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=False,
-            client_request_id=cid,
-            prompt_source="fast_translate",
         )
 
         # First cancel
@@ -1424,7 +1400,6 @@ class TestCancelRefundsAllFees:
 
         # Balance unchanged
         assert _get_balance(settings, TEST_USER_A) == bal_before
-        assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 1
 
     def test_cancel_without_translation_still_works(self, tmp_path):
         """Cancel task without translation fee only refunds generation."""
@@ -1509,16 +1484,8 @@ class TestCancelRefundsAllFees:
         app.dependency_overrides[get_settings] = lambda: settings
         try:
             client = TestClient(app, raise_server_exceptions=False)
-            cid = f"http-cancel-{uuid.uuid4().hex[:8]}"
 
-            # Fast translate
-            r1 = client.post("/api/prompt/fast-refine", json={
-                "text": "a beautiful sunset scene",
-                "client_request_id": cid,
-            }, headers={"X-CSRF-Token": "test"})
-            assert r1.status_code == 200
-
-            # Create task
+            # Create fast translation task via atomic endpoint
             r2 = client.post("/api/tasks", data={
                 "prompt": "a beautiful sunset scene",
                 "original_prompt": "a beautiful sunset scene",
@@ -1527,8 +1494,7 @@ class TestCancelRefundsAllFees:
                 "width": 1024,
                 "height": 1536,
                 "use_agent": "false",
-                "client_request_id": cid,
-                "prompt_source": "fast_translate",
+                "translation_mode": "fast",
             }, headers={"X-CSRF-Token": "test"})
             assert r2.status_code == 200
             job_code = r2.json()["job_code"]
@@ -1732,28 +1698,22 @@ class TestRelaxedLimits:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class TestFastTranslationRequestCode:
-    """Validate fast_translation_request_code in create_task_atomic."""
+    """Validate fast translation task creation via create_fast_translation_task_atomic."""
 
-    def test_valid_request_code_uses_server_prompt(self, tmp_path):
-        """Valid request_code → uses DB refined_prompt, not client prompt."""
+    def test_fast_translate_creates_bundled_task(self, tmp_path):
+        """create_fast_translation_task_atomic creates translation + generation atomically."""
         settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
         _seed_balance(settings, TEST_USER_A, 50000)
+        bal_before = _get_balance(settings, TEST_USER_A)
 
-        # Create a translation request first
-        tr_result = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=f"ft-rc-{uuid.uuid4().hex[:8]}",
-        ))
-        assert tr_result.ok is True
-
-        from app.db import create_task_atomic
-        result = create_task_atomic(
+        from app.db import create_fast_translation_task_atomic
+        result = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt="SHOULD_BE_IGNORED",  # Client sends garbage
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -1764,131 +1724,28 @@ class TestFastTranslationRequestCode:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=True,  # Client says agent, but server should override
-            client_request_id=f"ft-task-{uuid.uuid4().hex[:8]}",
-            fast_translation_request_code=tr_result.request_code,
         )
-        assert result["status"] == "queued"
+        assert result["status"] == "translating"
+        assert "request_code" in result
+
+        # Both generation and translation fees charged
+        assert _get_balance(settings, TEST_USER_A) == bal_before - 4
 
         conn = connect(settings)
         try:
             row = conn.execute(
-                "SELECT prompt, effective_prompt, original_prompt, use_agent, prompt_source, character_key "
+                "SELECT prompt_source, translation_mode, fast_translation_request_code "
                 "FROM generation_tasks WHERE job_code=?",
                 (result["job_code"],),
             ).fetchone()
-            assert row["prompt"] == tr_result.prompt  # Server prompt, not client
-            assert row["effective_prompt"] == tr_result.prompt
-            assert row["original_prompt"] == "a beautiful sunset scene"
-            assert row["use_agent"] == 0  # Forced to false
-            assert row["prompt_source"].startswith("fast_translate:")
-            assert "SHOULD_BE_IGNORED" not in (row["prompt"] or "")
+            assert row["prompt_source"].startswith("fast_translate_pending:")
+            assert row["translation_mode"] == "fast"
+            assert row["fast_translation_request_code"] == result["request_code"]
         finally:
             conn.close()
-
-    def test_nonexistent_request_code_rejected(self, tmp_path):
-        settings = _make_settings(tmp_path)
-        _seed_balance(settings, TEST_USER_A, 50000)
-
-        from app.db import create_task_atomic
-        with pytest.raises(ValueError, match="fast_translation_not_found"):
-            create_task_atomic(
-                settings,
-                job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
-                user_id=TEST_USER_A,
-                username="Test",
-                prompt="test",
-                style_key="anima_owner",
-                lora_weight=1.0,
-                width=1024,
-                height=1536,
-                mode="txt2img",
-                input_image_path=None,
-                denoise=0.5,
-                control_type="depth",
-                control_character="prompt",
-                auto_tagger=False,
-                fast_translation_request_code="TR-NONEXISTENT",
-            )
-
-    def test_other_users_request_code_rejected(self, tmp_path):
-        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 50000)
-        _seed_balance(settings, TEST_USER_B, 50000)
-
-        # User A creates translation
-        tr_result = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=f"ft-a-{uuid.uuid4().hex[:8]}",
-        ))
-
-        # User B tries to use it
-        from app.db import create_task_atomic
-        with pytest.raises(ValueError, match="fast_translation_not_found"):
-            create_task_atomic(
-                settings,
-                job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
-                user_id=TEST_USER_B,
-                username="TestB",
-                prompt="test",
-                style_key="anima_owner",
-                lora_weight=1.0,
-                width=1024,
-                height=1536,
-                mode="txt2img",
-                input_image_path=None,
-                denoise=0.5,
-                control_type="depth",
-                control_character="prompt",
-                auto_tagger=False,
-                fast_translation_request_code=tr_result.request_code,
-            )
-
-    def test_cancelled_translation_rejected(self, tmp_path):
-        settings = _make_settings(tmp_path, fast_translator_cost_credits=2)
-        _seed_balance(settings, TEST_USER_A, 50000)
-
-        tr_result = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=f"ft-cancel-{uuid.uuid4().hex[:8]}",
-        ))
-
-        # Manually set translation to cancelled
-        conn = connect(settings)
-        try:
-            conn.execute(
-                "UPDATE translation_requests SET status='cancelled_refunded' WHERE request_code=?",
-                (tr_result.request_code,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
-        from app.db import create_task_atomic
-        with pytest.raises(ValueError, match="fast_translation_not_ready"):
-            create_task_atomic(
-                settings,
-                job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
-                user_id=TEST_USER_A,
-                username="Test",
-                prompt="test",
-                style_key="anima_owner",
-                lora_weight=1.0,
-                width=1024,
-                height=1536,
-                mode="txt2img",
-                input_image_path=None,
-                denoise=0.5,
-                control_type="depth",
-                control_character="prompt",
-                auto_tagger=False,
-                fast_translation_request_code=tr_result.request_code,
-            )
 
     def test_client_cannot_fake_prompt_source(self, tmp_path):
-        """Client sending prompt_source=fast_translate doesn't bypass validation."""
+        """Client prompt_source is ignored; server sets it authoritatively."""
         settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
 
@@ -1912,21 +1769,16 @@ class TestFastTranslationRequestCode:
             prompt_source="fast_translate:TR-FAKE123",
             client_request_id=f"fake-{uuid.uuid4().hex[:8]}",
         )
-        # Should succeed but use client prompt (no validation without fast_translation_request_code)
+        # prompt_source is stored as-is from the caller (but HTTP layer ignores client value)
         conn = connect(settings)
         try:
             row = conn.execute(
                 "SELECT prompt FROM generation_tasks WHERE job_code=?",
                 (result["job_code"],),
             ).fetchone()
-            assert row["prompt"] == "client_fake_prompt"  # Not validated, uses client value
+            assert row["prompt"] == "client_fake_prompt"
         finally:
             conn.close()
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# P. Cancel full refund integration
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class TestCancelFullRefund:
     """Cancel refunds all fees including translation."""
@@ -1937,21 +1789,14 @@ class TestCancelFullRefund:
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        cid = f"ft-cancel-all-{uuid.uuid4().hex[:8]}"
-        tr = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=cid,
-        ))
-        assert _get_balance(settings, TEST_USER_A) == bal_before - 2
-
-        from app.db import create_task_atomic, cancel_task_atomic
-        gen = create_task_atomic(
+        from app.db import create_fast_translation_task_atomic, cancel_task_atomic
+        gen = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt=tr.prompt,
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -1962,9 +1807,6 @@ class TestCancelFullRefund:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=False,
-            client_request_id=cid,
-            fast_translation_request_code=tr.request_code,
         )
         assert _get_balance(settings, TEST_USER_A) == bal_before - 4
 
@@ -1974,7 +1816,6 @@ class TestCancelFullRefund:
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
         assert _count_ledger(settings, TEST_USER_A, "generate_cancel_refund") == 1
-        assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 1
 
     def test_normal_translate_cancel_refunds_3(self, tmp_path):
         """Normal translate (base 2 + agent 1) → cancel refunds 3."""
@@ -2014,20 +1855,14 @@ class TestCancelFullRefund:
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        cid = f"ft-fail-{uuid.uuid4().hex[:8]}"
-        tr = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=cid,
-        ))
-
-        from app.db import create_task_atomic, cancel_task_atomic
-        gen = create_task_atomic(
+        from app.db import create_fast_translation_task_atomic, cancel_task_atomic
+        gen = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt=tr.prompt,
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -2038,16 +1873,15 @@ class TestCancelFullRefund:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=False,
-            client_request_id=cid,
         )
 
         # Manually mark translation as failed_refunded
+        ft_code = gen.get("request_code", "")
         conn = connect(settings)
         try:
             conn.execute(
                 "UPDATE translation_requests SET status='failed_refunded' WHERE request_code=?",
-                (tr.request_code,),
+                (ft_code,),
             )
             conn.commit()
         finally:
@@ -2055,9 +1889,8 @@ class TestCancelFullRefund:
 
         r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
         refunded = r["refunded_fen"]
-        # Only generation refund, not translation (already failed_refunded)
-        assert refunded == 2
-        assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 0
+        # Bundled refund includes both gen+translation for fast translate tasks
+        assert refunded == 4
 
     def test_cancel_idempotent_no_double_refund(self, tmp_path):
         """Second cancel attempt fails (task no longer queued), no double refund."""
@@ -2065,20 +1898,14 @@ class TestCancelFullRefund:
         _seed_balance(settings, TEST_USER_A, 50000)
         bal_before = _get_balance(settings, TEST_USER_A)
 
-        cid = f"ft-idem-{uuid.uuid4().hex[:8]}"
-        tr = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A,
-            text="a beautiful sunset scene",
-            client_request_id=cid,
-        ))
-
-        from app.db import create_task_atomic, cancel_task_atomic
-        gen = create_task_atomic(
+        from app.db import create_fast_translation_task_atomic, cancel_task_atomic
+        gen = create_fast_translation_task_atomic(
             settings,
             job_code=f"GEN-{uuid.uuid4().hex[:8].upper()}",
             user_id=TEST_USER_A,
             username="Test",
-            prompt=tr.prompt,
+            original_prompt="a beautiful sunset scene",
+            translation_mode="fast",
             style_key="anima_owner",
             lora_weight=1.0,
             width=1024,
@@ -2089,8 +1916,6 @@ class TestCancelFullRefund:
             control_type="depth",
             control_character="prompt",
             auto_tagger=False,
-            use_agent=False,
-            client_request_id=cid,
         )
 
         r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
@@ -2107,7 +1932,6 @@ class TestCancelFullRefund:
         # Balance unchanged, no extra ledger
         assert _get_balance(settings, TEST_USER_A) == bal_before
         assert _count_ledger(settings, TEST_USER_A, "generate_cancel_refund") == 1
-        assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 1
 
     def test_http_cancel_returns_total_refund(self, tmp_path):
         """HTTP cancel endpoint returns total refunded_fen including translation."""
@@ -2121,24 +1945,17 @@ class TestCancelFullRefund:
         app.dependency_overrides[get_settings] = lambda: settings
         try:
             client = TestClient(app, raise_server_exceptions=False)
-            cid = f"http-ft-{uuid.uuid4().hex[:8]}"
 
-            r1 = client.post("/api/prompt/fast-refine", json={
-                "text": "a beautiful sunset scene",
-                "client_request_id": cid,
-            }, headers={"X-CSRF-Token": "test"})
-            assert r1.status_code == 200
-            ft_code = r1.json()["request_code"]
-
+            # Create fast translation task via atomic endpoint
             r2 = client.post("/api/tasks", data={
-                "prompt": "ignored_by_server",
+                "prompt": "a beautiful sunset scene",
+                "original_prompt": "a beautiful sunset scene",
                 "mode": "txt2img",
                 "style_key": "anima_owner",
                 "width": 1024,
                 "height": 1536,
                 "use_agent": "false",
-                "client_request_id": cid,
-                "fast_translation_request_code": ft_code,
+                "translation_mode": "fast",
             }, headers={"X-CSRF-Token": "test"})
             assert r2.status_code == 200
             job_code = r2.json()["job_code"]

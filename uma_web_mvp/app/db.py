@@ -114,6 +114,7 @@ def ensure_schema(settings: Settings) -> None:
             translation_mode TEXT NOT NULL DEFAULT 'none',
             fast_translation_request_code TEXT NOT NULL DEFAULT '',
             request_fingerprint TEXT NOT NULL DEFAULT '',
+            queued_at INTEGER,
             source TEXT NOT NULL DEFAULT 'discord'
         );
         CREATE TABLE IF NOT EXISTS balance_ledger (
@@ -604,6 +605,8 @@ def ensure_schema(settings: Settings) -> None:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN fast_translation_request_code TEXT NOT NULL DEFAULT ''")
         if "request_fingerprint" not in columns:
             conn.execute("ALTER TABLE generation_tasks ADD COLUMN request_fingerprint TEXT NOT NULL DEFAULT ''")
+        if "queued_at" not in columns:
+            conn.execute("ALTER TABLE generation_tasks ADD COLUMN queued_at INTEGER")
         conn.execute("UPDATE generation_tasks SET original_prompt = prompt WHERE original_prompt IS NULL")
         conn.execute("UPDATE generation_tasks SET effective_prompt = prompt WHERE effective_prompt IS NULL AND use_agent = 0")
         conn.execute(
@@ -843,7 +846,7 @@ def create_task_atomic(
     use_agent: bool = False, client_request_id: str | None = None,
     prompt_source: str = "", character_key: str = "", mock_result: str = "",
     original_prompt: str | None = None,
-    fast_translation_request_code: str | None = None,
+    request_fingerprint: str = "",
 ) -> dict[str, Any]:
     clean_mock = str(mock_result or "").strip().lower()
     if clean_mock:
@@ -873,13 +876,17 @@ def create_task_atomic(
         if request_id:
             existing = conn.execute(
                 """
-                SELECT job_code, charged_fen, status
+                SELECT job_code, charged_fen, status, request_fingerprint
                 FROM generation_tasks
                 WHERE user_id=? AND client_request_id=?
                 """,
                 (user_id, request_id),
             ).fetchone()
             if existing:
+                existing_fp = str(dict(existing).get("request_fingerprint") or "")
+                if existing_fp and request_fingerprint and existing_fp != request_fingerprint:
+                    conn.rollback()
+                    raise ValueError("client_request_id_conflict")
                 conn.commit()
                 return {
                     "job_code": existing["job_code"],
@@ -887,29 +894,6 @@ def create_task_atomic(
                     "status": existing["status"],
                     "deduped": True,
                 }
-
-        # ── Validate fast_translation_request_code if provided ──
-        ft_code = str(fast_translation_request_code or "").strip()
-        if ft_code:
-            tr = conn.execute(
-                "SELECT id,request_code,charged_credits,refined_prompt,original_text,"
-                "character_keys_json,translation_mode,status,client_request_id "
-                "FROM translation_requests WHERE request_code=? AND user_id=?",
-                (ft_code, user_id),
-            ).fetchone()
-            if not tr:
-                raise ValueError("fast_translation_not_found")
-            if str(tr["status"] or "") != "done":
-                raise ValueError("fast_translation_not_ready")
-            refined = str(tr["refined_prompt"] or "").strip()
-            if not refined:
-                raise ValueError("fast_translation_not_ready")
-            # Use server-side validated data
-            prompt = refined
-            original_prompt = str(tr["original_text"] or "")
-            prompt_source = f"fast_translate:{tr['request_code']}"
-            character_key = str(tr["character_keys_json"] or "")
-            use_agent = False
 
         global_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
@@ -956,8 +940,9 @@ def create_task_atomic(
                 job_code,user_id,username,channel_id,prompt,original_prompt,effective_prompt,use_agent,
                 client_request_id,style_key,lora_weight,width,height,
                 generation_mode,input_image_path,denoise,control_type,control_character,auto_tagger,
-                workflow_key,prompt_source,character_key,mock_result,charged_fen,status,created_at,source
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web')
+                workflow_key,prompt_source,character_key,mock_result,charged_fen,status,created_at,source,
+                request_fingerprint
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web', ?)
             """,
             (
                 job_code, user_id, username[:120], None, prompt, (original_prompt or prompt), None if use_agent else prompt,
@@ -965,6 +950,7 @@ def create_task_atomic(
                 mode, input_image_path, float(denoise), control_type, control_character,
                 1 if auto_tagger else 0, style_key, str(prompt_source or "")[:120],
                 _validate_character_key(character_key), str(mock_result or "")[:20], charged_fen, now,
+                str(request_fingerprint or "")[:128],
             ),
         )
         conn.commit()
@@ -1073,6 +1059,7 @@ def create_fast_translation_task_atomic(
     client_request_id: str | None = None,
     mock_result: str = "",
     workflow_key: str = "",
+    input_image_stable_id: str = "",
 ) -> dict[str, Any]:
     """Atomically create a fast translation task.
 
@@ -1139,7 +1126,7 @@ def create_fast_translation_task_atomic(
         control_character=control_character,
         auto_tagger=auto_tagger,
         workflow_key=workflow_key or style_key,
-        input_image_stable_id=str(input_image_path or ""),
+        input_image_stable_id=str(input_image_stable_id or input_image_path or ""),
     )
 
     conn = connect(settings)
@@ -3613,31 +3600,14 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> dict:
             )
             total_refunded += charged_fen
 
-        # Refund translation fee using explicit server-side binding
+        # Refund translation fee using explicit server-side binding only
+        tr = None
         if ft_code:
             tr = conn.execute(
                 "SELECT id,request_code,charged_credits,status FROM translation_requests "
                 "WHERE request_code=? AND user_id=? AND generation_job_code=?",
                 (ft_code, user_id, job_code),
             ).fetchone()
-        else:
-            # Fallback: old flow without fast_translation_request_code binding.
-            # Look up orphaned translation request by client_request_id.
-            cid = str(row_dict.get("client_request_id") or "").strip()
-            tr = None
-            if cid:
-                tr = conn.execute(
-                    "SELECT id,request_code,charged_credits,status FROM translation_requests "
-                    "WHERE user_id=? AND client_request_id=? AND (generation_job_code IS NULL OR generation_job_code='') "
-                    "AND status IN ('queued','processing','done') LIMIT 1",
-                    (user_id, cid),
-                ).fetchone()
-                if tr:
-                    # Bind it now so future lookups are direct
-                    conn.execute(
-                        "UPDATE translation_requests SET generation_job_code=? WHERE id=?",
-                        (job_code, tr["id"]),
-                    )
 
         if tr and str(tr["status"] or "") in {"queued", "processing", "done"}:
             if translation_mode != "fast":
