@@ -150,7 +150,7 @@ class Settings(BaseSettings):
     deepseek_chat_max_output_tokens: int = 4096
     deepseek_max_retries: int = 2
     fast_translator_enabled: bool = False
-    fast_translator_cost_credits: int = 1
+    fast_translator_cost_credits: int = 2
     ai_support_enabled: bool = False
     ai_support_max_history: int = 20
     ai_support_rate_limit_per_minute: int = 10

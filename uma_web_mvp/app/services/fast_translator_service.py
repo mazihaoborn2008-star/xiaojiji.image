@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -33,6 +34,15 @@ class FastTranslatorError(RuntimeError):
         self.message = message
 
 
+class ClientRequestIdConflict(FastTranslatorError):
+    """Raised when same client_request_id is reused with different payload."""
+    def __init__(self):
+        super().__init__(
+            "client_request_id_conflict",
+            "The same client_request_id was already used with different request content.",
+        )
+
+
 class CharacterSelectionRequired(FastTranslatorError):
     def __init__(self, resolution: dict[str, Any]):
         super().__init__("character_resolution_required", "请选择具体人物后继续生成")
@@ -54,6 +64,31 @@ class FastTranslateResult:
 def make_translation_code() -> str:
     alphabet = string.ascii_uppercase + string.digits
     return "TR-" + "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+def _compute_fast_translation_fingerprint(
+    *,
+    user_id: str,
+    text: str,
+    character_keys: list[str],
+    character_resolution: dict[str, Any] | None,
+) -> str:
+    """Compute stable SHA-256 fingerprint for fast translation request.
+
+    Covers all fields that affect the translation result:
+    - user_id (isolation)
+    - original text
+    - resolved character keys (sorted for stability)
+    - raw character resolution payload (for edge cases)
+    """
+    payload = {
+        "user_id": user_id,
+        "text": text,
+        "character_keys": sorted(character_keys),
+        "character_resolution": character_resolution,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _safe_tags_from_model(data: dict[str, Any]) -> str:
@@ -92,9 +127,6 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
         try:
             validated = validate_character_resolution(prompt, resolution)
         except ValueError:
-            # validate_character_resolution raises when parser finds mentions
-            # but selections don't match. Check if user provided explicit IDs
-            # and reject them as invalid.
             selections = resolution.get("selections") or []
             requested_ids = [
                 str(s.get("characterId") or s.get("selectedCharacterId") or "").strip()
@@ -105,7 +137,8 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
             ]
             if requested_ids:
                 raise FastTranslatorError("invalid_character_resolution", "人物选择结果无效，请重新选择。")
-            raise
+            # All selections are NO_LIBRARY_CHARACTER_ID → skip character
+            return [], "none"
         ids = [
             str(item.get("characterId") or item.get("key") or "").strip()
             for item in validated.get("resolvedCharacters", []) or []
@@ -146,11 +179,26 @@ def _resolve_characters(prompt: str, resolution: dict[str, Any] | None) -> tuple
     return [], "none"
 
 
-def _begin_charge(settings: Settings, *, user_id: str, text: str, client_request_id: str | None, character_keys: list[str], source: str) -> dict[str, Any]:
+def _begin_charge(
+    settings: Settings,
+    *,
+    user_id: str,
+    text: str,
+    client_request_id: str | None,
+    character_keys: list[str],
+    source: str,
+    character_resolution: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     now = int(time.time())
     request_id = str(client_request_id or "").strip()[:80] or None
     cost = max(0, int(settings.fast_translator_cost_credits))
     request_code = make_translation_code()
+    fingerprint = _compute_fast_translation_fingerprint(
+        user_id=user_id,
+        text=text,
+        character_keys=character_keys,
+        character_resolution=character_resolution,
+    )
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -160,6 +208,16 @@ def _begin_charge(settings: Settings, *, user_id: str, text: str, client_request
                 (user_id, request_id),
             ).fetchone()
             if existing:
+                existing_fp = str(existing["request_fingerprint"] or "")
+                if existing_fp and existing_fp != fingerprint:
+                    conn.rollback()
+                    raise ClientRequestIdConflict()
+                # Legacy rows without fingerprint: fall back to text comparison
+                if not existing_fp:
+                    existing_text = str(existing["original_text"] or "")
+                    if existing_text != text:
+                        conn.rollback()
+                        raise ClientRequestIdConflict()
                 conn.commit()
                 return {"existing": dict(existing)}
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
@@ -180,12 +238,13 @@ def _begin_charge(settings: Settings, *, user_id: str, text: str, client_request
             """
             INSERT INTO translation_requests(
                 request_code,user_id,client_request_id,translation_mode,model,character_match_source,
-                character_keys_json,original_text,charged_credits,ledger_id,status,created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                character_keys_json,original_text,charged_credits,ledger_id,status,created_at,request_fingerprint
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 request_code, user_id, request_id, "fast", settings.deepseek_model, source,
                 json.dumps(character_keys, ensure_ascii=False), text, cost, ledger_id, "processing", now,
+                fingerprint,
             ),
         )
         conn.commit()
@@ -276,6 +335,7 @@ async def fast_refine_prompt(
         client_request_id=client_request_id,
         character_keys=character_keys,
         source=source,
+        character_resolution=character_resolution,
     )
     if "existing" in charge:
         return _result_from_row(charge["existing"])

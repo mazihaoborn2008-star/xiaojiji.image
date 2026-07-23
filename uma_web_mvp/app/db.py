@@ -651,6 +651,11 @@ def ensure_schema(settings: Settings) -> None:
         if "structured_draft_json" not in draft_columns:
             conn.execute("ALTER TABLE smart_agent_prompt_drafts ADD COLUMN structured_draft_json TEXT DEFAULT ''")
 
+        # ── Request fingerprint for fast translation idempotency ──
+        tr_columns = {row[1] for row in conn.execute("PRAGMA table_info(translation_requests)").fetchall()}
+        if "request_fingerprint" not in tr_columns:
+            conn.execute("ALTER TABLE translation_requests ADD COLUMN request_fingerprint TEXT DEFAULT ''")
+
         # ── Idempotency table for smart agent task creation ──
         conn.execute("""
             CREATE TABLE IF NOT EXISTS smart_agent_request_idempotency (

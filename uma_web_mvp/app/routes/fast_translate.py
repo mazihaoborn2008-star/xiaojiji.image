@@ -9,7 +9,7 @@ from app.auth import get_current_user, get_legacy_user_id_for_session, require_c
 from app.config import Settings, get_settings
 from app.main_limiter import limiter
 from app.schemas import UserSession
-from app.services.fast_translator_service import CharacterSelectionRequired, FastTranslatorError, fast_refine_prompt
+from app.services.fast_translator_service import CharacterSelectionRequired, ClientRequestIdConflict, FastTranslatorError, fast_refine_prompt
 
 router = APIRouter(prefix="/api/prompt", tags=["fast-translate"])
 
@@ -62,6 +62,11 @@ async def fast_refine(
                 "resolution": exc.resolution,
                 "characterResolution": exc.resolution,
             },
+        ) from exc
+    except ClientRequestIdConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"ok": False, "code": exc.code, "message": exc.message},
         ) from exc
     except FastTranslatorError as exc:
         status = 402 if exc.code == "insufficient_credits" else 400

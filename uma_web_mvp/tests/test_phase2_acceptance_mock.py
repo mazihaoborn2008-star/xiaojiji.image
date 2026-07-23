@@ -1159,18 +1159,19 @@ class TestRequestLifecycle:
             codes.add(result.request_code)
 
     def test_client_request_id_dedup(self):
+        """Same client_request_id + same payload → cached result, single charge."""
         case_root = _case_root()
         settings = _make_settings(case_root)
         _seed_balance(settings, TEST_USER, 50000)
         client_id = f"dedup-{uuid.uuid4().hex[:8]}"
 
         async def _first():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="第一次", client_request_id=client_id)
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="相同的文本", client_request_id=client_id)
         result1 = _run(_first())
         bal1 = _get_balance(settings, TEST_USER)
 
         async def _second():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="第二次", client_request_id=client_id)
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="相同的文本", client_request_id=client_id)
         result2 = _run(_second())
         bal2 = _get_balance(settings, TEST_USER)
 
