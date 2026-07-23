@@ -6321,16 +6321,16 @@ def cancel(
     user: UserSession = Depends(get_current_user),
     s: Settings = Depends(get_settings),
 ):
-    limiter.check(f"cancel:{user.user_id}", limit=10, window_seconds=60)
+    limiter.check(f"cancel:{user.user_id}", limit=20, window_seconds=60)
     legacy_id = get_legacy_user_id_for_session(user, s)
     try:
-        refunded, input_path = cancel_task_atomic(s, legacy_id, job_code.upper())
+        refunded, input_path, new_balance = cancel_task_atomic(s, legacy_id, job_code.upper())
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     safe_cleanup_input(s, input_path)
-    return {"ok": True, "refunded_fen": refunded}
+    return {"ok": True, "refunded_fen": refunded, "balance_fen": new_balance}
 
 
 @app.get("/api/outputs/{output_id}")

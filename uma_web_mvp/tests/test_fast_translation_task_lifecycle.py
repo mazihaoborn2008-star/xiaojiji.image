@@ -447,7 +447,7 @@ class TestCancelTranslating:
         job_code = result["job_code"]
 
         # Cancel
-        refunded, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
+        refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
         assert refunded == result["charged_fen"]
 
         # Balance restored
@@ -539,7 +539,7 @@ class TestCancelQueued:
         )
 
         # Cancel
-        refunded, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
+        refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
         assert refunded == result["charged_fen"]
         assert _get_balance(s, TEST_USER_A) == balance_before
 
@@ -798,7 +798,7 @@ class TestConcurrentCancelWorkerRace:
 
         def try_cancel():
             try:
-                refunded, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
+                refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
                 results.append(refunded)
             except Exception as e:
                 errors.append(e)

@@ -875,12 +875,18 @@ function renderCurrentTask(task) {
     cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
     cancelBtn.onclick = async () => {
       if (!confirm(`取消 ${task.job_code}？`)) return;
+      cancelBtn.disabled = true;
       try {
-        await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        await loadCurrentTask();
-        await loadQueueStatus();
-        await loadTaskSummary();
-      } catch(e) { alert(e.message); }
+        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
+        if (res && res.balance_fen != null) {
+          me = {...me, balance_fen: res.balance_fen};
+          $('balance').textContent = credits(res.balance_fen);
+        }
+        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
+        loadCurrentTask().catch(() => {});
+        loadQueueStatus().catch(() => {});
+        loadTaskSummary().catch(() => {});
+      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
     };
     actions.append(cancelBtn);
     container.append(actions);
@@ -905,17 +911,18 @@ function renderCurrentTask(task) {
     cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
     cancelBtn.onclick = async () => {
       if (!confirm(`取消 ${task.job_code}？`)) return;
+      cancelBtn.disabled = true;
       try {
-        await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        await loadCurrentTask();
-        await loadQueueStatus();
-        await loadTaskSummary();
-        // Refresh balance after cancel refund
-        try {
-          me = await api('/api/me');
-          $('balance').textContent = credits(me.balance_fen);
-        } catch(_) {}
-      } catch(e) { alert(e.message); }
+        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
+        if (res && res.balance_fen != null) {
+          me = {...me, balance_fen: res.balance_fen};
+          $('balance').textContent = credits(res.balance_fen);
+        }
+        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
+        loadCurrentTask().catch(() => {});
+        loadQueueStatus().catch(() => {});
+        loadTaskSummary().catch(() => {});
+      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
     };
     actions.append(cancelBtn);
     container.append(actions);
@@ -1597,15 +1604,21 @@ function historyCard(task) {
     cancelBtn.onclick = async (event) => {
       event.stopPropagation();
       if (!confirm(`取消 ${task.job_code}？`)) return;
+      cancelBtn.disabled = true;
       try {
-        await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        // Refresh both history and current task
+        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
+        if (res && res.balance_fen != null) {
+          me = {...me, balance_fen: res.balance_fen};
+          const balEl = $('balance');
+          if (balEl) balEl.textContent = credits(res.balance_fen);
+        }
+        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
         historyOffset = 0;
-        await loadHistory(true, {force: true, preserveScroll: true});
-        await loadCurrentTask();
-        await loadQueueStatus();
-        await loadTaskSummary();
-      } catch(e) { alert(e.message); }
+        loadHistory(true, {force: true, preserveScroll: true}).catch(() => {});
+        loadCurrentTask().catch(() => {});
+        loadQueueStatus().catch(() => {});
+        loadTaskSummary().catch(() => {});
+      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
     };
     actions.append(cancelBtn);
     card.append(actions);

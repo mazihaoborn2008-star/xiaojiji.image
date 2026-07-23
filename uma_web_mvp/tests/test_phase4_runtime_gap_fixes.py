@@ -1365,7 +1365,7 @@ class TestCancelRefundsAllFees:
 
         # Cancel - should refund BOTH
         from app.db import cancel_task_atomic
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
         assert refunded == 4  # generation(2) + translation(2)
 
         bal_after_cancel = _get_balance(settings, TEST_USER_A)
@@ -1411,7 +1411,7 @@ class TestCancelRefundsAllFees:
         )
 
         # First cancel
-        refunded1, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded1, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
         assert refunded1 == 4
         bal_after = _get_balance(settings, TEST_USER_A)
         assert bal_after == bal_before
@@ -1454,7 +1454,7 @@ class TestCancelRefundsAllFees:
         bal_after_gen = _get_balance(settings, TEST_USER_A)
         assert bal_before - bal_after_gen == 2
 
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
         assert refunded == 2  # only generation
         assert _get_balance(settings, TEST_USER_A) == bal_before
         assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 0
@@ -1489,7 +1489,7 @@ class TestCancelRefundsAllFees:
         bal_after_gen = _get_balance(settings, TEST_USER_A)
         assert bal_before - bal_after_gen == 3  # base(2) + agent(1)
 
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
         assert refunded == 3  # full refund
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -1964,7 +1964,7 @@ class TestCancelFullRefund:
         )
         assert _get_balance(settings, TEST_USER_A) == bal_before - 4
 
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
         assert refunded == 4
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -1998,7 +1998,7 @@ class TestCancelFullRefund:
         )
         assert _get_balance(settings, TEST_USER_A) == bal_before - 3
 
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
         assert refunded == 3
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -2047,7 +2047,7 @@ class TestCancelFullRefund:
         finally:
             conn.close()
 
-        refunded, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
         # Only generation refund, not translation (already failed_refunded)
         assert refunded == 2
         assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 0
@@ -2086,7 +2086,7 @@ class TestCancelFullRefund:
             client_request_id=cid,
         )
 
-        refunded1, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded1, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
         assert refunded1 == 4
         assert _get_balance(settings, TEST_USER_A) == bal_before
 

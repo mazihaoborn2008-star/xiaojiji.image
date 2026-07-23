@@ -3533,7 +3533,7 @@ def get_user_task_summary(settings: Settings, user_id: str) -> dict[str, int]:
         conn.close()
 
 
-def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple[int, str | None]:
+def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple[int, str | None, int]:
     now = int(time.time())
     conn = connect(settings)
     try:
@@ -3606,7 +3606,10 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
                 )
 
         conn.commit()
-        return total_refunded, row_dict["input_image_path"]
+        # Read authoritative balance after commit
+        bal_row = conn.execute("SELECT balance_fen FROM users WHERE user_id=?", (user_id,)).fetchone()
+        new_balance = int(bal_row[0]) if bal_row else 0
+        return total_refunded, row_dict["input_image_path"], new_balance
     except Exception:
         conn.rollback()
         raise
