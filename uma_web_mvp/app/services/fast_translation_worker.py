@@ -80,56 +80,68 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
     """
     now = int(time.time())
     stale_before = now - FAST_TRANSLATION_CLAIM_TTL
+
+    # Step 1: Find stale tasks (read-only)
     conn = connect(settings)
     try:
-        conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
             "SELECT tr.id, tr.request_code, tr.generation_job_code, tr.attempt_count "
             "FROM translation_requests tr "
             "WHERE tr.status = 'processing' AND tr.started_at < ?",
             (stale_before,),
         ).fetchall()
-        requeued = 0
-        failed = 0
-        for row in rows:
-            row_dict = dict(row)
-            tr_id = row_dict["id"]
-            attempt = int(row_dict.get("attempt_count") or 0)
-            job_code = str(row_dict.get("generation_job_code") or "")
-            request_code = str(row_dict.get("request_code") or "")
+    finally:
+        conn.close()
 
-            if attempt < FAST_TRANSLATION_MAX_ATTEMPTS:
-                # Requeue: processing → queued, clear started_at
-                conn.execute(
+    if not rows:
+        return 0
+
+    requeued = 0
+    failed = 0
+
+    for row in rows:
+        row_dict = dict(row)
+        tr_id = row_dict["id"]
+        attempt = int(row_dict.get("attempt_count") or 0)
+        job_code = str(row_dict.get("generation_job_code") or "")
+        request_code = str(row_dict.get("request_code") or "")
+
+        if attempt < FAST_TRANSLATION_MAX_ATTEMPTS:
+            # Requeue: processing → queued, clear started_at
+            conn = connect(settings)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cur = conn.execute(
                     "UPDATE translation_requests SET status='queued', started_at=NULL, error_code='stale_requeued' "
                     "WHERE id=? AND status='processing'",
                     (tr_id,),
                 )
-                requeued += 1
-            else:
-                # Max attempts exceeded: fail and refund
-                if job_code:
-                    try:
-                        fail_fast_translation_task_refund_atomic(
-                            settings,
-                            job_code=job_code,
-                            error_code="fast_translate_stale_max_attempts",
-                        )
-                        failed += 1
-                    except Exception:
-                        pass
-        conn.commit()
-        if requeued or failed:
-            print(
-                f"[FAST_TRANSLATION_WORKER] recovery: requeued={requeued} failed={failed}",
-                flush=True,
-            )
-        return requeued + failed
-    except Exception:
-        conn.rollback()
-        return 0
-    finally:
-        conn.close()
+                if cur.rowcount == 1:
+                    requeued += 1
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            finally:
+                conn.close()
+        else:
+            # Max attempts exceeded: fail and refund (separate atomic transaction)
+            if job_code:
+                try:
+                    fail_fast_translation_task_refund_atomic(
+                        settings,
+                        job_code=job_code,
+                        error_code="fast_translate_stale_max_attempts",
+                    )
+                    failed += 1
+                except Exception:
+                    pass
+
+    if requeued or failed:
+        print(
+            f"[FAST_TRANSLATION_WORKER] recovery: requeued={requeued} failed={failed}",
+            flush=True,
+        )
+    return requeued + failed
 
 
 def complete_fast_translation(

@@ -885,7 +885,13 @@ def create_task_atomic(
             ).fetchone()
             if existing:
                 existing_fp = str(dict(existing).get("request_fingerprint") or "")
-                if existing_fp and request_fingerprint and existing_fp != request_fingerprint:
+                # Conflict if fingerprints differ, or if either is empty (can't safely compare)
+                if existing_fp and request_fingerprint:
+                    if existing_fp != request_fingerprint:
+                        conn.rollback()
+                        raise ValueError("client_request_id_conflict")
+                elif existing_fp or request_fingerprint:
+                    # One has fingerprint, other doesn't → safe conflict
                     conn.rollback()
                     raise ValueError("client_request_id_conflict")
                 conn.commit()
