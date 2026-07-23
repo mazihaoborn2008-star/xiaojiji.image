@@ -3533,7 +3533,15 @@ def get_user_task_summary(settings: Settings, user_id: str) -> dict[str, int]:
         conn.close()
 
 
-def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple[int, str | None, int]:
+def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> dict:
+    """Atomically cancel a generation task.
+
+    Returns a dict with keys:
+      job_code, status, refunded_fen, balance_fen, already_cancelled
+
+    Idempotent: calling on already-cancelled/failed tasks returns success
+    with refunded_fen=0 and already_cancelled=True.
+    """
     now = int(time.time())
     conn = connect(settings)
     try:
@@ -3548,11 +3556,34 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
             raise LookupError("任务不存在")
         row_dict = dict(row)
         current_status = str(row_dict.get("status") or "")
+
+        # --- Idempotent: already terminal refund states ---
+        if current_status in {"cancelled_refunded", "failed_refunded"}:
+            bal_row = conn.execute("SELECT balance_fen FROM users WHERE user_id=?", (user_id,)).fetchone()
+            conn.commit()
+            return {
+                "job_code": job_code,
+                "status": current_status,
+                "refunded_fen": 0,
+                "balance_fen": int(bal_row[0]) if bal_row else 0,
+                "already_cancelled": True,
+                "input_image_path": None,
+            }
+
+        # --- Disallow cancel for processing/done ---
+        if current_status == "processing":
+            raise RuntimeError("任务正在生成中，无法取消")
+        if current_status == "done":
+            raise RuntimeError("任务已完成，无法取消")
+
+        # --- Only queued/translating can be cancelled ---
         if current_status not in {"queued", "translating"}:
-            raise RuntimeError("只有 queued 或 translating 任务可以取消")
+            raise RuntimeError(f"当前状态 '{current_status}' 不允许取消")
+
         charged_fen = int(row_dict["charged_fen"])
         translation_mode = str(row_dict.get("translation_mode") or "none")
         ft_code = str(row_dict.get("fast_translation_request_code") or "")
+        input_path = row_dict["input_image_path"]
 
         cur = conn.execute(
             "UPDATE generation_tasks SET status='cancelled_refunded',finished_at=?,error='cancelled from web' "
@@ -3560,7 +3591,18 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
             (now, job_code, user_id),
         )
         if cur.rowcount != 1:
-            raise RuntimeError("任务状态已变化，无法取消")
+            # Another concurrent request won — treat as idempotent
+            bal_row = conn.execute("SELECT balance_fen FROM users WHERE user_id=?", (user_id,)).fetchone()
+            conn.commit()
+            return {
+                "job_code": job_code,
+                "status": "cancelled_refunded",
+                "refunded_fen": 0,
+                "balance_fen": int(bal_row[0]) if bal_row else 0,
+                "already_cancelled": True,
+                "input_image_path": None,
+            }
+
         total_refunded = 0
         if charged_fen:
             conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (charged_fen, user_id))
@@ -3572,44 +3614,63 @@ def cancel_task_atomic(settings: Settings, user_id: str, job_code: str) -> tuple
             total_refunded += charged_fen
 
         # Refund translation fee using explicit server-side binding
-        # Use fast_translation_request_code (server-generated, trustworthy)
-        # NOTE: For fast translation (translation_mode='fast'), charged_fen already
-        # includes the translation cost, so we only update the translation request status
-        # without additional refund.
         if ft_code:
             tr = conn.execute(
                 "SELECT id,request_code,charged_credits,status FROM translation_requests "
                 "WHERE request_code=? AND user_id=? AND generation_job_code=?",
                 (ft_code, user_id, job_code),
             ).fetchone()
-            if tr and str(tr["status"] or "") in {"queued", "processing", "done"}:
-                if translation_mode != "fast":
-                    # Only separately refund for old-style fast translations where
-                    # charged_fen does NOT include translation cost
-                    tr_charged = int(tr["charged_credits"] or 0)
-                    if tr_charged:
-                        existing_refund = conn.execute(
-                            "SELECT id FROM balance_ledger WHERE order_code=? AND reason='fast_translate_cancel_refund' LIMIT 1",
-                            (tr["request_code"],),
-                        ).fetchone()
-                        if not existing_refund:
-                            conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (tr_charged, user_id))
-                            conn.execute(
-                                "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
-                                "VALUES (?,?,'fast_translate_cancel_refund',?,?,?)",
-                                (user_id, tr_charged, tr["request_code"], user_id, now),
-                            )
-                            total_refunded += tr_charged
-                conn.execute(
-                    "UPDATE translation_requests SET status='cancelled_refunded', finished_at=? WHERE id=?",
-                    (now, tr["id"]),
-                )
+        else:
+            # Fallback: old flow without fast_translation_request_code binding.
+            # Look up orphaned translation request by client_request_id.
+            cid = str(row_dict.get("client_request_id") or "").strip()
+            tr = None
+            if cid:
+                tr = conn.execute(
+                    "SELECT id,request_code,charged_credits,status FROM translation_requests "
+                    "WHERE user_id=? AND client_request_id=? AND (generation_job_code IS NULL OR generation_job_code='') "
+                    "AND status IN ('queued','processing','done') LIMIT 1",
+                    (user_id, cid),
+                ).fetchone()
+                if tr:
+                    # Bind it now so future lookups are direct
+                    conn.execute(
+                        "UPDATE translation_requests SET generation_job_code=? WHERE id=?",
+                        (job_code, tr["id"]),
+                    )
+
+        if tr and str(tr["status"] or "") in {"queued", "processing", "done"}:
+            if translation_mode != "fast":
+                tr_charged = int(tr["charged_credits"] or 0)
+                if tr_charged:
+                    existing_refund = conn.execute(
+                        "SELECT id FROM balance_ledger WHERE order_code=? AND reason='fast_translate_cancel_refund' LIMIT 1",
+                        (tr["request_code"],),
+                    ).fetchone()
+                    if not existing_refund:
+                        conn.execute("UPDATE users SET balance_fen=balance_fen+? WHERE user_id=?", (tr_charged, user_id))
+                        conn.execute(
+                            "INSERT INTO balance_ledger(user_id,amount_fen,reason,order_code,operator_id,created_at) "
+                            "VALUES (?,?,'fast_translate_cancel_refund',?,?,?)",
+                            (user_id, tr_charged, tr["request_code"], user_id, now),
+                        )
+                        total_refunded += tr_charged
+            conn.execute(
+                "UPDATE translation_requests SET status='cancelled_refunded', finished_at=? WHERE id=?",
+                (now, tr["id"]),
+            )
 
         conn.commit()
         # Read authoritative balance after commit
         bal_row = conn.execute("SELECT balance_fen FROM users WHERE user_id=?", (user_id,)).fetchone()
-        new_balance = int(bal_row[0]) if bal_row else 0
-        return total_refunded, row_dict["input_image_path"], new_balance
+        return {
+            "job_code": job_code,
+            "status": "cancelled_refunded",
+            "refunded_fen": total_refunded,
+            "balance_fen": int(bal_row[0]) if bal_row else 0,
+            "already_cancelled": False,
+            "input_image_path": input_path,
+        }
     except Exception:
         conn.rollback()
         raise

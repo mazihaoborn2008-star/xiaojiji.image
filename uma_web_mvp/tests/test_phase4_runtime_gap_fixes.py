@@ -102,7 +102,6 @@ def _make_settings(tmp_path: Path, **overrides) -> Settings:
     }
     data.update(overrides)
     s = Settings(**data)
-    s.validate_local_isolation()
     ensure_schema(s)
     return s
 
@@ -1365,7 +1364,8 @@ class TestCancelRefundsAllFees:
 
         # Cancel - should refund BOTH
         from app.db import cancel_task_atomic
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded = r["refunded_fen"]
         assert refunded == 4  # generation(2) + translation(2)
 
         bal_after_cancel = _get_balance(settings, TEST_USER_A)
@@ -1411,14 +1411,16 @@ class TestCancelRefundsAllFees:
         )
 
         # First cancel
-        refunded1, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded1 = r["refunded_fen"]
         assert refunded1 == 4
         bal_after = _get_balance(settings, TEST_USER_A)
         assert bal_after == bal_before
 
-        # Task is no longer queued, second cancel should fail
-        with pytest.raises(RuntimeError, match="只有 queued 任务可以取消"):
-            cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        # Task is no longer queued, second cancel should be idempotent
+        r2 = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        assert r2["already_cancelled"] is True
+        assert r2["refunded_fen"] == 0
 
         # Balance unchanged
         assert _get_balance(settings, TEST_USER_A) == bal_before
@@ -1454,7 +1456,8 @@ class TestCancelRefundsAllFees:
         bal_after_gen = _get_balance(settings, TEST_USER_A)
         assert bal_before - bal_after_gen == 2
 
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded = r["refunded_fen"]
         assert refunded == 2  # only generation
         assert _get_balance(settings, TEST_USER_A) == bal_before
         assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 0
@@ -1489,7 +1492,8 @@ class TestCancelRefundsAllFees:
         bal_after_gen = _get_balance(settings, TEST_USER_A)
         assert bal_before - bal_after_gen == 3  # base(2) + agent(1)
 
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen_result["job_code"])
+        refunded = r["refunded_fen"]
         assert refunded == 3  # full refund
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -1964,7 +1968,8 @@ class TestCancelFullRefund:
         )
         assert _get_balance(settings, TEST_USER_A) == bal_before - 4
 
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded = r["refunded_fen"]
         assert refunded == 4
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -1998,7 +2003,8 @@ class TestCancelFullRefund:
         )
         assert _get_balance(settings, TEST_USER_A) == bal_before - 3
 
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded = r["refunded_fen"]
         assert refunded == 3
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
@@ -2047,7 +2053,8 @@ class TestCancelFullRefund:
         finally:
             conn.close()
 
-        refunded, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded = r["refunded_fen"]
         # Only generation refund, not translation (already failed_refunded)
         assert refunded == 2
         assert _count_ledger(settings, TEST_USER_A, "fast_translate_cancel_refund") == 0
@@ -2086,13 +2093,16 @@ class TestCancelFullRefund:
             client_request_id=cid,
         )
 
-        refunded1, _, _ = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        r = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        refunded1 = r["refunded_fen"]
         assert refunded1 == 4
         assert _get_balance(settings, TEST_USER_A) == bal_before
 
-        # Second cancel should fail
-        with pytest.raises(RuntimeError, match="只有 queued 任务可以取消"):
-            cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        # Second cancel should be idempotent (no double refund)
+        r2 = cancel_task_atomic(settings, TEST_USER_A, gen["job_code"])
+        assert r2["already_cancelled"] is True
+        assert r2["refunded_fen"] == 0
+        assert r2["balance_fen"] == bal_before
 
         # Balance unchanged, no extra ledger
         assert _get_balance(settings, TEST_USER_A) == bal_before

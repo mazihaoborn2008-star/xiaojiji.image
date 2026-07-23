@@ -218,6 +218,7 @@ async function api(url, options = {}) {
       console.log('[API] error', res.status, '→', msg.slice(0, 120));
       const error = new Error(msg);
       error.status = res.status;
+      error.url = url;
       error.data = data;
       throw error;
     }
@@ -230,6 +231,72 @@ async function api(url, options = {}) {
   }
 }
 function credits(fen){ return `${Math.trunc(Number(fen || 0))} credits`; }
+
+/** ── Unified cancel helper ──────────────────────────────────────── */
+const cancelInFlightJobs = new Set();
+
+/**
+ * Cancel a task and refresh UI state.
+ * @param {string} jobCode
+ * @param {HTMLButtonElement|null} cancelButton
+ * @param {object} options - { historyDrawer: boolean }
+ */
+async function cancelTaskAndRefresh(jobCode, cancelButton, options = {}) {
+  // Guard: prevent duplicate cancel requests for the same job
+  if (cancelInFlightJobs.has(jobCode)) return;
+  cancelInFlightJobs.add(jobCode);
+  if (cancelButton) cancelButton.disabled = true;
+
+  try {
+    const res = await api(`/api/tasks/${jobCode}/cancel`, {method:'POST'});
+
+    // Cancel mutation succeeded — update balance immediately from response
+    if (res && res.balance_fen != null) {
+      me = {...me, balance_fen: res.balance_fen};
+      const balEl = $('balance');
+      if (balEl) balEl.textContent = credits(res.balance_fen);
+    }
+
+    // Log if already cancelled (idempotent)
+    if (res && res.already_cancelled) {
+      console.warn(`[CANCEL] ${jobCode} was already cancelled`);
+    }
+
+    // Fire-and-forget refreshes — 429 from these must NOT show as cancel failure
+    const refreshes = [
+      loadCurrentTask().catch(e => console.warn('[CANCEL] refresh task failed:', e.status || e.message)),
+      loadQueueStatus().catch(e => console.warn('[CANCEL] refresh queue failed:', e.status || e.message)),
+      loadTaskSummary().catch(e => console.warn('[CANCEL] refresh summary failed:', e.status || e.message)),
+    ];
+    if (options.historyDrawer) {
+      refreshes.push(
+        (async () => { historyOffset = 0; await loadHistory(true, {force: true, preserveScroll: true}); })()
+          .catch(e => console.warn('[CANCEL] refresh history failed:', e.status || e.message))
+      );
+    }
+    await Promise.allSettled(refreshes);
+
+    // Schedule a lightweight retry after 3s in case refreshes were rate-limited
+    setTimeout(() => {
+      loadCurrentTask().catch(() => {});
+      loadQueueStatus().catch(() => {});
+    }, 3000);
+
+  } catch(e) {
+    // Only the cancel mutation itself failed — show error
+    const status = e.status || 0;
+    if (status === 429) {
+      const retrySec = e.data?.detail?.retry_after || 5;
+      setMessage('message', t('app.cancel_rate_limited', `取消操作过于频繁，请在 ${retrySec} 秒后重试。`, {seconds: retrySec}), 'error');
+    } else {
+      setMessage('message', translateApiMessage(e.message), 'error');
+    }
+    if (cancelButton) cancelButton.disabled = false;
+  } finally {
+    cancelInFlightJobs.delete(jobCode);
+  }
+}
+
 function setMessage(elId, text, type=''){ const el=$(elId); if(!el) return; el.textContent=translateMessage(text); el.className=`message ${type}`; }
 function maybeShowWelcomeBonus(user) {
   const el = $('welcomeBonusBanner');
@@ -873,20 +940,9 @@ function renderCurrentTask(task) {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ghost';
     cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
-    cancelBtn.onclick = async () => {
+    cancelBtn.onclick = () => {
       if (!confirm(`取消 ${task.job_code}？`)) return;
-      cancelBtn.disabled = true;
-      try {
-        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        if (res && res.balance_fen != null) {
-          me = {...me, balance_fen: res.balance_fen};
-          $('balance').textContent = credits(res.balance_fen);
-        }
-        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
-        loadCurrentTask().catch(() => {});
-        loadQueueStatus().catch(() => {});
-        loadTaskSummary().catch(() => {});
-      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
+      cancelTaskAndRefresh(task.job_code, cancelBtn);
     };
     actions.append(cancelBtn);
     container.append(actions);
@@ -909,20 +965,9 @@ function renderCurrentTask(task) {
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'ghost';
     cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
-    cancelBtn.onclick = async () => {
+    cancelBtn.onclick = () => {
       if (!confirm(`取消 ${task.job_code}？`)) return;
-      cancelBtn.disabled = true;
-      try {
-        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        if (res && res.balance_fen != null) {
-          me = {...me, balance_fen: res.balance_fen};
-          $('balance').textContent = credits(res.balance_fen);
-        }
-        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
-        loadCurrentTask().catch(() => {});
-        loadQueueStatus().catch(() => {});
-        loadTaskSummary().catch(() => {});
-      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
+      cancelTaskAndRefresh(task.job_code, cancelBtn);
     };
     actions.append(cancelBtn);
     container.append(actions);
@@ -1601,24 +1646,10 @@ function historyCard(task) {
     cancelBtn.className = 'ghost';
     cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
     cancelBtn.style.marginTop = '6px';
-    cancelBtn.onclick = async (event) => {
+    cancelBtn.onclick = (event) => {
       event.stopPropagation();
       if (!confirm(`取消 ${task.job_code}？`)) return;
-      cancelBtn.disabled = true;
-      try {
-        const res = await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
-        if (res && res.balance_fen != null) {
-          me = {...me, balance_fen: res.balance_fen};
-          const balEl = $('balance');
-          if (balEl) balEl.textContent = credits(res.balance_fen);
-        }
-        // Fire-and-forget refreshes — 429 from these must not show as cancel failure
-        historyOffset = 0;
-        loadHistory(true, {force: true, preserveScroll: true}).catch(() => {});
-        loadCurrentTask().catch(() => {});
-        loadQueueStatus().catch(() => {});
-        loadTaskSummary().catch(() => {});
-      } catch(e) { alert(e.message); cancelBtn.disabled = false; }
+      cancelTaskAndRefresh(task.job_code, cancelBtn, {historyDrawer: true});
     };
     actions.append(cancelBtn);
     card.append(actions);

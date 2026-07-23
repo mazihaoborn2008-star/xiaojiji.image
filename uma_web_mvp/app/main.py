@@ -6321,16 +6321,27 @@ def cancel(
     user: UserSession = Depends(get_current_user),
     s: Settings = Depends(get_settings),
 ):
-    limiter.check(f"cancel:{user.user_id}", limit=20, window_seconds=60)
+    limiter.check(
+        f"cancel:{user.user_id}",
+        limit=max(1, int(getattr(s, 'cancel_submit_user_limit', 60) or 60)),
+        window_seconds=max(1, int(getattr(s, 'cancel_submit_window_seconds', 60) or 60)),
+    )
     legacy_id = get_legacy_user_id_for_session(user, s)
     try:
-        refunded, input_path, new_balance = cancel_task_atomic(s, legacy_id, job_code.upper())
+        result = cancel_task_atomic(s, legacy_id, job_code.upper())
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    safe_cleanup_input(s, input_path)
-    return {"ok": True, "refunded_fen": refunded, "balance_fen": new_balance}
+    safe_cleanup_input(s, result.get("input_image_path"))
+    return {
+        "ok": True,
+        "job_code": result["job_code"],
+        "status": result["status"],
+        "refunded_fen": result["refunded_fen"],
+        "balance_fen": result["balance_fen"],
+        "already_cancelled": result["already_cancelled"],
+    }
 
 
 @app.get("/api/outputs/{output_id}")

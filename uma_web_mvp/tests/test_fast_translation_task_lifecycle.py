@@ -447,7 +447,8 @@ class TestCancelTranslating:
         job_code = result["job_code"]
 
         # Cancel
-        refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
+        r = cancel_task_atomic(s, TEST_USER_A, job_code)
+        refunded = r["refunded_fen"]
         assert refunded == result["charged_fen"]
 
         # Balance restored
@@ -539,7 +540,8 @@ class TestCancelQueued:
         )
 
         # Cancel
-        refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
+        r = cancel_task_atomic(s, TEST_USER_A, job_code)
+        refunded = r["refunded_fen"]
         assert refunded == result["charged_fen"]
         assert _get_balance(s, TEST_USER_A) == balance_before
 
@@ -572,10 +574,10 @@ class TestCancelQueued:
         cancel_task_atomic(s, TEST_USER_A, job_code)
         balance_after_first = _get_balance(s, TEST_USER_A)
 
-        # Second cancel should fail
-        with pytest.raises(RuntimeError, match="只有 queued 或 translating 任务可以取消"):
-            cancel_task_atomic(s, TEST_USER_A, job_code)
-
+        # Second cancel should be idempotent (no double refund)
+        r2 = cancel_task_atomic(s, TEST_USER_A, job_code)
+        assert r2["already_cancelled"] is True
+        assert r2["refunded_fen"] == 0
         assert _get_balance(s, TEST_USER_A) == balance_after_first
 
 
@@ -798,8 +800,8 @@ class TestConcurrentCancelWorkerRace:
 
         def try_cancel():
             try:
-                refunded, _, _ = cancel_task_atomic(s, TEST_USER_A, job_code)
-                results.append(refunded)
+                r = cancel_task_atomic(s, TEST_USER_A, job_code)
+                results.append(r)
             except Exception as e:
                 errors.append(e)
 
@@ -810,10 +812,15 @@ class TestConcurrentCancelWorkerRace:
         t1.join()
         t2.join()
 
-        # Exactly one should succeed
-        assert len(results) == 1
-        assert len(errors) == 1
-        assert isinstance(errors[0], RuntimeError)
+        charged = result["charged_fen"]
+        # Both should succeed — one refunds, one is idempotent
+        assert len(results) == 2
+        assert len(errors) == 0
+        refunded_amounts = [r["refunded_fen"] for r in results]
+        already_flags = [r["already_cancelled"] for r in results]
+        assert sum(refunded_amounts) == charged  # total refund matches charged amount
+        assert already_flags.count(True) == 1  # exactly one was already_cancelled
+        assert already_flags.count(False) == 1
 
         # Balance should be restored to seed amount exactly
         assert _get_balance(s, TEST_USER_A) == seed_balance

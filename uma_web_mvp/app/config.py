@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     max_active_tasks_per_user: int = 10
     generation_submit_user_limit: int = 20
     generation_submit_window_seconds: int = 60
+    cancel_submit_user_limit: int = 60
+    cancel_submit_window_seconds: int = 60
     max_input_image_bytes: int = 12 * 1024 * 1024
     estimated_generation_seconds: int = 18
     estimated_agent_seconds: int = 51
