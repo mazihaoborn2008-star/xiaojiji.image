@@ -774,6 +774,32 @@ function renderCurrentTask(task) {
       details.append(summary, body);
       promptEl.append(details);
     }
+    // Show translating hint for fast translation tasks without effective_prompt
+    const isFastTranslating = task.translation_mode === 'fast' && status === 'translating' && !effectivePrompt;
+    if (isFastTranslating && !usesAgent && !isSmartAgent) {
+      const hint = document.createElement('div');
+      hint.className = 'ct-prompt-hint translating-hint';
+      hint.textContent = t('task.fast_translating_hint', 'Agent 极速翻译中，请稍候……');
+      promptEl.append(hint);
+    }
+    // For fast translation tasks with effective_prompt, show it
+    const isFastTranslated = task.translation_mode === 'fast' && effectivePrompt && !usesAgent && !isSmartAgent;
+    if (isFastTranslated) {
+      const details = document.createElement('details');
+      details.dataset.jobCode = task.job_code;
+      details.dataset.panel = 'effective-prompt';
+      details.open = Boolean(promptDetailsOpenByJobCode.get(task.job_code));
+      details.addEventListener('toggle', () => {
+        promptDetailsOpenByJobCode.set(task.job_code, details.open);
+      });
+      const summary = document.createElement('summary');
+      summary.textContent = t('task.effective_prompt', '实际生图 Prompt');
+      summary.addEventListener('click', (event) => event.stopPropagation());
+      const body = document.createElement('div');
+      body.textContent = effectivePrompt;
+      details.append(summary, body);
+      promptEl.append(details);
+    }
     if (promptEl.childNodes.length) container.append(promptEl);
     const metaEl = document.createElement('div');
     metaEl.className = 'ct-meta';
@@ -790,7 +816,7 @@ function renderCurrentTask(task) {
   const statusMap = {
     smart_planning: [t('task.smart_planning', '智能 Agent 规划中'), 'smart_planning'],
     queued: [t('task.queued', '排队中'), 'queued'],
-    translating: [t('task.translating', '翻译中'), 'translating'],
+    translating: [t('task.translating', 'Agent 极速翻译中'), 'translating'],
     processing: [t('task.processing', '出图中'), 'processing'],
     done: [t('task.done', '已完成'), 'done'],
     failed_refunded: [t('task.failed', '生成失败'), 'failed_refunded'],
@@ -867,9 +893,32 @@ function renderCurrentTask(task) {
     hint.className = 'ct-hint';
     hint.textContent = isLongRunningTask(task, 'translating_started_at')
       ? t('task.long_wait', '处理时间较长，请继续等待…')
-      : t('task.translating_hint', 'Agent 正在翻译 Prompt…');
+      : t('task.translating_hint', 'Agent 极速翻译中，请稍候……');
     container.append(hint);
     appendCurrentEta();
+
+    // Cancel button for translating tasks
+    const actions = document.createElement('div');
+    actions.className = 'ct-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'ghost';
+    cancelBtn.textContent = t('task.cancel_refund', '取消并退款');
+    cancelBtn.onclick = async () => {
+      if (!confirm(`取消 ${task.job_code}？`)) return;
+      try {
+        await api(`/api/tasks/${task.job_code}/cancel`, {method:'POST'});
+        await loadCurrentTask();
+        await loadQueueStatus();
+        await loadTaskSummary();
+        // Refresh balance after cancel refund
+        try {
+          me = await api('/api/me');
+          $('balance').textContent = credits(me.balance_fen);
+        } catch(_) {}
+      } catch(e) { alert(e.message); }
+    };
+    actions.append(cancelBtn);
+    container.append(actions);
   }
   else if (status === 'processing') {
     makeHeader(task.job_code, statusEl);
@@ -2151,6 +2200,7 @@ $('generateForm').addEventListener('submit', async(e) => {
     await doSubmit(promptText, w, h);
   } finally {
     window._submitLock = false;
+    $('submitBtn').disabled = false;
   }
 });
 
@@ -2163,48 +2213,14 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
   setMessage('message', t('topup.submitting', '正在提交…'));
   const requestId = clientRequestId || makeClientRequestId();
   const translationMode = getTranslationMode();
-  let promptForTask = promptText;
-  let effectivePromptForPreview = translationMode === 'normal' ? null : promptText;
-  let promptSource = '';
-
-  if (translationMode === 'fast') {
-    try {
-      setMessage('message', t('app.fast_translating', '正在极速翻译…'));
-      const fastPayload = {
-        text: promptText,
-        client_request_id: requestId,
-      };
-      if (characterResolution) fastPayload.character_resolution = characterResolution;
-      const fastData = await api('/api/prompt/fast-refine', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(fastPayload),
-      });
-      promptForTask = fastData.prompt || promptText;
-      effectivePromptForPreview = promptForTask;
-      promptSource = `fast_translate:${fastData.request_code || ''}`;
-      window._lastFastTranslationCode = fastData.request_code || '';
-    } catch (err) {
-      const resolution = getCharacterResolutionDetail(err);
-      if (resolution && !characterResolution) {
-        const opened = renderCharacterResolutionDialog(resolution, {promptText, w, h, clientRequestId: requestId});
-        if (opened) {
-          setMessage('message', '');
-          return;
-        }
-      }
-      setMessage('message', translateApiMessage(err.message), 'error');
-      return;
-    }
-  }
 
   const fd = new FormData();
   fd.set('mode', $('mode').value);
   const selectedStyleKey = normalizeStyleKey($('styleKey').value);
   fd.set('style_key', selectedStyleKey);
-  fd.set('prompt', promptForTask);
-  if (translationMode === 'fast') fd.set('original_prompt', promptText);
-  fd.set('prompt_source', translationMode === 'fast' ? 'fast_translate' : '');
+  fd.set('prompt', promptText);
+  fd.set('original_prompt', promptText);
+  fd.set('translation_mode', translationMode);
   fd.set('width', String(w));
   fd.set('height', String(h));
   fd.set('lora_weight', $('loraWeight').value);
@@ -2214,9 +2230,6 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
   fd.set('auto_tagger', $('autoTagger').checked ? 'true' : 'false');
   fd.set('use_agent', translationMode === 'normal' ? 'true' : 'false');
   fd.set('client_request_id', requestId);
-  if (translationMode === 'fast' && window._lastFastTranslationCode) {
-    fd.set('fast_translation_request_code', window._lastFastTranslationCode);
-  }
   if (characterResolution) fd.set('character_resolution', JSON.stringify(characterResolution));
   if ($('inputImage').files[0]) fd.set('input_image', $('inputImage').files[0]);
 
@@ -2224,19 +2237,27 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
     const shouldSelectSubmittedJob = !activeJobCode;
     const data = await api('/api/tasks', {method:'POST', body:fd});
     latestSubmittedJobCode = data.job_code;
-    setMessage('message', t('app.queued_success', `已加入任务队列：${data.job_code}`, {job: data.job_code}), 'ok');
+
+    // Determine status message and initial UI state
+    const isTranslating = data.status === 'translating';
+    if (isTranslating) {
+      setMessage('message', t('app.translating_queued', `任务已创建，Agent 极速翻译中：${data.job_code}`, {job: data.job_code}), 'ok');
+    } else {
+      setMessage('message', t('app.queued_success', `已加入任务队列：${data.job_code}`, {job: data.job_code}), 'ok');
+    }
+
     await loadQueueStatus();
     await loadTaskSummary();
 
     if (shouldSelectSubmittedJob) {
       setActiveJob(data.job_code, me.user_id);
-      console.log(`[UI] selected job=${activeJobCode} status=queued`);
+      console.log(`[UI] selected job=${activeJobCode} status=${data.status}`);
       renderCurrentTask({
         job_code: activeJobCode,
-        status: 'queued',
+        status: data.status || 'queued',
         prompt: promptText,
         original_prompt: promptText,
-        effective_prompt: effectivePromptForPreview,
+        effective_prompt: isTranslating ? null : promptText,
         use_agent: translationMode === 'normal' ? 1 : 0,
         generation_mode: $('mode').value,
         style_key: selectedStyleKey,
@@ -2262,8 +2283,9 @@ async function doSubmit(promptText, w, h, characterResolution = null, clientRequ
       $('balance').textContent = credits(me.balance_fen);
     } catch(_) {}
   } catch(err) {
+    // Handle character resolution for any translation mode
     const resolution = getCharacterResolutionDetail(err);
-    if (resolution && translationMode === 'normal' && !characterResolution) {
+    if (resolution && !characterResolution) {
       const opened = renderCharacterResolutionDialog(resolution, {promptText, w, h, clientRequestId: requestId});
       if (opened) {
         setMessage('message', '');
