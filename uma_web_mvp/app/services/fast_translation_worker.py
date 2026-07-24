@@ -398,7 +398,7 @@ async def fast_translation_worker_loop(settings: Settings) -> None:
                     )
 
             except (DeepSeekError, RuntimeError) as exc:
-                error_code = getattr(exc, "code", type(exc).__name__)
+                error_code = getattr(exc, "code", None) or str(exc) or type(exc).__name__
                 print(
                     f"[FAST_TRANSLATION_WORKER] failed request={request_code} job={job_code} error={error_code}",
                     flush=True,

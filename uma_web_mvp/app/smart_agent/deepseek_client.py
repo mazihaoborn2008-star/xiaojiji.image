@@ -65,7 +65,7 @@ async def complete_json(
             last_error = exc
             if index + 1 < attempts:
                 await asyncio.sleep(1.2 * (index + 1))
-    raise DeepSeekError(type(last_error).__name__ if last_error else "deepseek_failed")
+    raise DeepSeekError(str(last_error) if last_error else "deepseek_failed")
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
