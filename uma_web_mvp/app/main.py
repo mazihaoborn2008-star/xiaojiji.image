@@ -6082,7 +6082,7 @@ async def create_task(
     original_prompt: str | None = Form(default=None),
     prompt_source: str | None = Form(default=None),
     fast_translation_request_code: str | None = Form(default=None),
-    translation_mode: str = Form("none"),  # accepted but server decides the real mode
+    translation_mode: str = Form(""),  # server decides the real mode
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6111,14 +6111,21 @@ async def create_task(
     input_path = None
 
     # Server determines translation_mode, not client
-    server_translation_mode = str(translation_mode or "none").strip().lower()
-    if server_translation_mode not in {"none", "normal", "fast"}:
+    _raw_tm = str(translation_mode or "").strip().lower()
+    if _raw_tm in {"none", "normal", "fast"}:
+        server_translation_mode = _raw_tm
+    elif bool(use_agent) and s.agent_enabled:
+        # Legacy client: use_agent=true without explicit translation_mode
+        server_translation_mode = "normal"
+    else:
         server_translation_mode = "none"
 
     # Fast translation path: single atomic call
     if server_translation_mode == "fast":
         if not s.fast_translator_enabled:
             raise HTTPException(status_code=400, detail="极速翻译当前未启用")
+        if not str(s.deepseek_api_key or "").strip():
+            raise HTTPException(status_code=503, detail={"code": "fast_translator_unavailable", "message": "极速翻译当前不可用，请稍后重试"})
 
         raw_prompt = (original_prompt or prompt or "").strip()
 
@@ -6226,24 +6233,9 @@ async def create_task(
         task_prompt_source = ""
         task_character_key = ""
 
-        # Server determines final translation_mode
-        # - explicit translation_mode=normal → normal translation
-        # - explicit translation_mode=none → direct
-        # - legacy: no translation_mode but use_agent=true → normal
-        # - otherwise → none
-        if server_translation_mode == "normal":
-            final_translation_mode = "normal"
-            final_use_agent = bool(s.agent_enabled)
-        elif server_translation_mode == "none":
-            final_translation_mode = "none"
-            final_use_agent = False
-        elif bool(use_agent) and s.agent_enabled:
-            # Legacy client: use_agent=true without explicit translation_mode
-            final_translation_mode = "normal"
-            final_use_agent = True
-        else:
-            final_translation_mode = "none"
-            final_use_agent = False
+        # Server already determined server_translation_mode above
+        final_translation_mode = server_translation_mode
+        final_use_agent = (final_translation_mode == "normal") and bool(s.agent_enabled)
 
         if not final_use_agent:
             # ── 直通模式:原文原样写入,不做人物匹配/校验/Tag注入 ──

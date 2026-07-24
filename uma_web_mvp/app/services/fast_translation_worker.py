@@ -82,12 +82,16 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
     stale_before = now - FAST_TRANSLATION_CLAIM_TTL
 
     # Step 1: Find stale tasks (read-only)
+    # Must verify generation task is still 'translating' to avoid reviving cancelled tasks
     conn = connect(settings)
     try:
         rows = conn.execute(
             "SELECT tr.id, tr.request_code, tr.generation_job_code, tr.attempt_count "
             "FROM translation_requests tr "
-            "WHERE tr.status = 'processing' AND tr.started_at < ?",
+            "JOIN generation_tasks gt ON gt.fast_translation_request_code = tr.request_code "
+            "WHERE tr.status = 'processing' AND tr.started_at < ? "
+            "AND gt.status = 'translating' "
+            "AND gt.fast_translation_request_code = tr.request_code",
             (stale_before,),
         ).fetchall()
     finally:
