@@ -42,6 +42,9 @@ class TestNoFalsePositives:
         "school uniform",
         "bedroom",
         "classroom",
+        "golden light",
+        "city lights",
+        "love story",
     ])
     def test_scene_word_no_match(self, text):
         result = analyze_character_mentions(text)
@@ -145,16 +148,31 @@ class TestAmbiguityPreserved:
 class TestFranchiseNames:
     """Franchise names alone should not resolve to a specific character."""
 
-    def test_umamusume_keyword(self):
-        result = analyze_character_mentions("umamusume")
-        # May be ambiguous (multiple characters) but must NOT auto-resolve
-        if result["status"] != "not_found":
-            # If it matches, it must be ambiguous, not resolved
-            assert result["status"] in ("ambiguous", "mixed")
-            assert len(result["resolvedCharacters"]) == 0
+    @pytest.mark.parametrize("text", [
+        "umamusume",
+        "uma musume",
+        "赛马娘",
+        "anime",
+        "other anime",
+        "其他动漫",
+    ])
+    def test_franchise_no_character_match(self, text):
+        result = analyze_character_mentions(text)
+        assert result["status"] == "not_found", (
+            f"Franchise term '{text}' should not trigger character matching, "
+            f"got status={result['status']}, mentions={result['mentions']}"
+        )
+        assert result["mentions"] == []
+        assert result["resolvedCharacters"] == []
 
-    def test_uma_musume_separate(self):
-        result = analyze_character_mentions("uma musume")
-        # Should not match individual characters from franchise name alone
-        if result["status"] != "not_found":
-            assert result["status"] in ("ambiguous", "mixed")
+    def test_umamusume_with_character(self):
+        """umamusume + character name should still resolve."""
+        result = analyze_character_mentions("umamusume rice shower")
+        ids = [c["characterId"] for c in result["resolvedCharacters"]]
+        assert "rice_shower" in ids
+
+    def test_franchise_hint_extraction(self):
+        """Franchise hints should still be extractable."""
+        from app.smart_agent.character_index import extract_franchise_hints
+        hints = extract_franchise_hints("umamusume rice shower")
+        assert "umamusume" in hints

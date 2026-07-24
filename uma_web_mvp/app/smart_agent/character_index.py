@@ -213,14 +213,18 @@ def _build_all_indexes() -> None:
             _ZH_SUBSTRING_INDEX[short_zh] = identities_found
 
     # 7. 英文短名索引（单英文词 → 多词人物名中的该词）
-    # Common English words that appear as parts of character names but
-    # should never trigger character matching on their own.
+    # Common English words and franchise/series terms that appear as parts
+    # of character names but should never trigger character matching alone.
     _EN_SHORT_STOP_WORDS: set[str] = {
         "black", "blue", "city", "coat", "dress", "fall", "gold",
         "green", "light", "love", "moon", "night", "rain", "red",
-        "rose", "silver", "sky", "snow", "spring", "star", "sun",
-        "summer", "white", "winter",
+        "rose", "silver", "sky", "snow", "special", "spring", "star",
+        "sun", "summer", "white", "winter",
     }
+    # Add franchise/series tokens: these are context hints, not character mentions.
+    for franchise_key in _FRANCHISE_INDEX:
+        for token in franchise_key.split():
+            _EN_SHORT_STOP_WORDS.add(token)
     all_en_keys: list[str] = []
     all_en_keys.extend(_EN_NAME_INDEX.keys())
     all_en_keys.extend(_EN_ALIAS_INDEX.keys())
