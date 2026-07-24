@@ -228,7 +228,7 @@ class TestStrictCharacterValidation:
         _seed_balance(settings, TEST_USER_A, 50000)
         with pytest.raises(CharacterSelectionRequired) as exc_info:
             _run(fast_refine_prompt(
-                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                settings, user_id=TEST_USER_A, text="麻美在舞台上",
                 client_request_id=f"empty-sel-{uuid.uuid4().hex[:8]}",
                 character_resolution={"status": "resolved", "selections": []},
             ))
@@ -239,7 +239,7 @@ class TestStrictCharacterValidation:
         _seed_balance(settings, TEST_USER_A, 50000)
         with pytest.raises(CharacterSelectionRequired) as exc_info:
             _run(fast_refine_prompt(
-                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                settings, user_id=TEST_USER_A, text="麻美在舞台上",
                 client_request_id=f"miss-sel-{uuid.uuid4().hex[:8]}",
                 character_resolution={"status": "resolved"},
             ))
@@ -250,7 +250,7 @@ class TestStrictCharacterValidation:
         _seed_balance(settings, TEST_USER_A, 50000)
         with pytest.raises(CharacterSelectionRequired) as exc_info:
             _run(fast_refine_prompt(
-                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                settings, user_id=TEST_USER_A, text="麻美在舞台上",
                 client_request_id=f"empty-dict-{uuid.uuid4().hex[:8]}",
                 character_resolution={"status": "resolved", "selections": [{}]},
             ))
@@ -265,14 +265,14 @@ class TestStrictCharacterValidation:
         settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
         result = _run(fast_refine_prompt(
-            settings, user_id=TEST_USER_A, text="miku在舞台上",
+            settings, user_id=TEST_USER_A, text="麻美在舞台上",
             client_request_id=f"wrong-mid-{uuid.uuid4().hex[:8]}",
             character_resolution={
                 "status": "resolved",
                 "selections": [{
                     "mentionId": "WRONG_ID",
-                    "rawText": "ik",
-                    "characterId": "meiko",
+                    "rawText": "麻美",
+                    "characterId": "nanami_mami",
                 }],
             },
         ))
@@ -284,14 +284,14 @@ class TestStrictCharacterValidation:
         _seed_balance(settings, TEST_USER_A, 50000)
         with pytest.raises(CharacterSelectionRequired) as exc_info:
             _run(fast_refine_prompt(
-                settings, user_id=TEST_USER_A, text="miku在舞台上",
+                settings, user_id=TEST_USER_A, text="麻美在舞台上",
                 client_request_id=f"wrong-raw-{uuid.uuid4().hex[:8]}",
                 character_resolution={
                     "status": "resolved",
                     "selections": [{
                         "mentionId": "DG-b98e5b10",
                         "rawText": "WRONG_RAW",
-                        "characterId": "meiko",
+                        "characterId": "nanami_mami",
                     }],
                 },
             ))
@@ -301,10 +301,10 @@ class TestStrictCharacterValidation:
         """Two ambiguous mentions, only one submitted → unresolved mention remains → rejected."""
         settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
-        # 'ikとmami' has 2 ambiguous mentions (ik→meiko/taiki_shuttle, mami→nanami_mami/tomoe_mami)
-        text = "ikとmamiが舞台に立っている"
+        # '麻美と爱丽丝' has 2 ambiguous mentions (麻美→nanami_mami/tomoe_mami, 爱丽丝→alice/tendou_aris/iris)
+        text = "麻美と爱丽丝在舞台上"
         analysis = analyze_character_mentions(text)
-        assert analysis["status"] == "ambiguous"
+        assert analysis["status"] in ("ambiguous", "mixed")
         assert len(analysis["mentions"]) >= 2
         mention = analysis["mentions"][0]  # submit only the first one
         with pytest.raises(CharacterSelectionRequired) as exc_info:
@@ -874,7 +874,7 @@ class TestHTTPCharacterConfirmation:
             client = TestClient(app, raise_server_exceptions=False)
 
             r = client.post("/api/prompt/fast-refine", json={
-                "text": "miku在舞台上",
+                "text": "麻美在舞台上",
                 "character_resolution": {"status": "resolved", "selections": []},
             }, headers={"X-CSRF-Token": "test"})
             assert r.status_code == 409

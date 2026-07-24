@@ -241,9 +241,9 @@ class TestResolutionCharacterKeys:
     def test_409_before_charge(self):
         """Short ambiguous name should raise CharacterSelectionRequired."""
         from app.services.fast_translator_service import CharacterSelectionRequired
-        # Use a known ambiguous input
+        # Use a known ambiguous input (麻美 matches nanami_mami and tomoe_mami)
         with pytest.raises(CharacterSelectionRequired):
-            _resolve_characters("miku", None)
+            _resolve_characters("麻美", None)
 
     def test_resolution_match_source(self):
         keys, source = _resolve_characters("初音在唱歌", {

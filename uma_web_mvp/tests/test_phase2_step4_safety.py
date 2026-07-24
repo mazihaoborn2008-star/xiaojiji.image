@@ -163,7 +163,7 @@ class TestInvalidPublicId:
         """Ambiguous input should raise CharacterSelectionRequired."""
         from app.services.fast_translator_service import CharacterSelectionRequired
         with pytest.raises(CharacterSelectionRequired):
-            _resolve_characters("miku", None)
+            _resolve_characters("麻美", None)
 
 
 # ── Fix 2: Tag deduplication ────────────────────────────────────

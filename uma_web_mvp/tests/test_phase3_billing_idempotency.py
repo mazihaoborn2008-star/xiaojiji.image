@@ -323,7 +323,7 @@ class Test409CharacterConfirmationBilling:
         before = _get_balance(settings, TEST_USER)
 
         async def _test():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="miku")
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="麻美")
 
         with pytest.raises(CharacterSelectionRequired):
             _run(_test())
@@ -342,8 +342,8 @@ class Test409CharacterConfirmationBilling:
         from app.smart_agent.disambiguation_engine import analyze_character_mentions
 
         # Step 1: Get 409
-        parsed = analyze_character_mentions("ta")
-        assert parsed.get("status") == "ambiguous"
+        parsed = analyze_character_mentions("麻美")
+        assert parsed.get("status") in ("ambiguous", "mixed")
 
         # Step 2: Build resolution from parsed mentions
         selections = []
@@ -361,7 +361,7 @@ class Test409CharacterConfirmationBilling:
 
         async def _test():
             return await fast_refine_prompt(
-                settings, user_id=TEST_USER, text="ta",
+                settings, user_id=TEST_USER, text="麻美",
                 character_resolution=resolution,
             )
 

@@ -210,9 +210,9 @@ class TestScenario2_AmbiguousCharacter:
     """Input ambiguous character name → CharacterSelectionRequired (409)."""
 
     def test_miku_ambiguous(self):
-        """'miku' alone is ambiguous → should raise CharacterSelectionRequired."""
+        """'麻美' alone is ambiguous → should raise CharacterSelectionRequired."""
         with pytest.raises(CharacterSelectionRequired):
-            _resolve_characters("miku", None)
+            _resolve_characters("麻美", None)
 
     def test_ta_ambiguous(self):
         """'ta' alone is ambiguous (multiple characters start with ta)."""
@@ -232,7 +232,7 @@ class TestScenario2_AmbiguousCharacter:
         _seed_balance(settings, TEST_USER)
 
         async def _test():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="miku")
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="麻美")
 
         with pytest.raises(CharacterSelectionRequired):
             _run(_test())
@@ -245,7 +245,7 @@ class TestScenario2_AmbiguousCharacter:
         before = _get_balance(settings, TEST_USER)
 
         async def _test():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="miku")
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="麻美")
 
         with pytest.raises(CharacterSelectionRequired):
             _run(_test())
@@ -258,8 +258,8 @@ class TestScenario2_AmbiguousCharacter:
         settings = _make_settings(case_root)
         _seed_balance(settings, TEST_USER)
 
-        # 'ta' is ambiguous with candidates narita_top_road and taiki_shuttle
-        parsed = analyze_character_mentions("ta")
+        # '麻美' is ambiguous with candidates nanami_mami and tomoe_mami
+        parsed = analyze_character_mentions("麻美")
         assert parsed.get("status") in ("ambiguous", "mixed", "resolved")
 
         if parsed.get("status") in ("ambiguous", "mixed"):
@@ -1053,7 +1053,7 @@ class TestScenario14_FastVsNormalBoundary:
         _seed_balance(settings, TEST_USER)
 
         async def _test():
-            return await fast_refine_prompt(settings, user_id=TEST_USER, text="miku")
+            return await fast_refine_prompt(settings, user_id=TEST_USER, text="麻美")
 
         with pytest.raises(CharacterSelectionRequired):
             _run(_test())
