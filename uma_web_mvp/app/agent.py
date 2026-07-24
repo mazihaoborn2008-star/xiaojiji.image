@@ -1,5 +1,6 @@
 import asyncio
 import re
+import json
 import time
 
 import httpx
@@ -21,6 +22,45 @@ PREFIX_RE = re.compile(
     r"^\s*(?:final\s+prompt|prompt|output|result|answer|converted\s+prompt|english\s+prompt|tags?)\s*[:：-]\s*",
     re.IGNORECASE,
 )
+
+
+def parse_generation_task_character_resolution(
+    character_key_field: str | list[str] | tuple[str, ...] | None,
+    *,
+    prompt_source: str | None = None,
+) -> tuple[list[str], bool]:
+    """Parse stored generation_tasks.character_key for the worker-side Agent.
+
+    New web submissions store selected character ids as a JSON array string
+    (for example ["vivlos"]).  Older worker code treated the field as a
+    comma-separated string, which made the literal JSON text look like one
+    invalid id.  Keep the legacy comma format as a fallback for old rows.
+    """
+    source = str(prompt_source or "").strip()
+    raw = character_key_field
+    if source == "agent_character_no_library":
+        return [], True
+    if isinstance(raw, (list, tuple)):
+        return [str(item).strip() for item in raw if str(item or "").strip()], False
+    text = str(raw or "").strip()
+    if not text or text == "[]":
+        return [], False
+    if text == "__no_library_character__":
+        return [], True
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            ids = [str(item).strip() for item in parsed if str(item or "").strip()]
+            return ids, False
+    ids = [
+        part.strip()
+        for part in text.split(",")
+        if part.strip() and part.strip() != "__no_library_character__"
+    ]
+    return ids, False
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 AGENT_SEMAPHORE: asyncio.Semaphore | None = None
 AGENT_SEMAPHORE_LIMIT = 0
