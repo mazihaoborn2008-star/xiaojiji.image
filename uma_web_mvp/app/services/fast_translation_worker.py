@@ -17,14 +17,16 @@ from app.services.deepseek_service import DeepSeekError, DeepSeekService
 from app.services.fast_translator_service import FAST_TRANSLATOR_SYSTEM_PROMPT, _safe_tags_from_model
 from app.smart_agent.character_preferences import split_prompt_tags
 
-FAST_TRANSLATION_CLAIM_TTL = 180  # seconds before a stale claim is reclaimed
-FAST_TRANSLATION_MAX_ATTEMPTS = 2  # first attempt + 1 crash recovery retry
+FAST_TRANSLATION_CLAIM_TTL = 180  # default, overridable via Settings
+FAST_TRANSLATION_MAX_ATTEMPTS = 2  # default, overridable via Settings
 
 
 def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
     """Claim one queued fast translation request with its associated generation task."""
+    claim_ttl = max(30, int(getattr(settings, "fast_translation_claim_ttl_seconds", FAST_TRANSLATION_CLAIM_TTL) or FAST_TRANSLATION_CLAIM_TTL))
+    max_attempts = max(1, int(getattr(settings, "fast_translation_max_attempts", FAST_TRANSLATION_MAX_ATTEMPTS) or FAST_TRANSLATION_MAX_ATTEMPTS))
     now = int(time.time())
-    stale_before = now - FAST_TRANSLATION_CLAIM_TTL
+    stale_before = now - claim_ttl
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -47,7 +49,7 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
             ORDER BY tr.created_at ASC, tr.id ASC
             LIMIT 1
             """,
-            (stale_before, FAST_TRANSLATION_MAX_ATTEMPTS),
+            (stale_before, max_attempts),
         ).fetchone()
         if not row:
             conn.commit()
@@ -78,20 +80,23 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
     For tasks with attempt_count >= max_attempts:
       fail and refund via atomic failure logic.
     """
+    claim_ttl = max(30, int(getattr(settings, "fast_translation_claim_ttl_seconds", FAST_TRANSLATION_CLAIM_TTL) or FAST_TRANSLATION_CLAIM_TTL))
+    max_attempts = max(1, int(getattr(settings, "fast_translation_max_attempts", FAST_TRANSLATION_MAX_ATTEMPTS) or FAST_TRANSLATION_MAX_ATTEMPTS))
     now = int(time.time())
-    stale_before = now - FAST_TRANSLATION_CLAIM_TTL
+    stale_before = now - claim_ttl
 
     # Step 1: Find stale tasks (read-only)
-    # Must verify generation task is still 'translating' to avoid reviving cancelled tasks
+    # Must verify generation task is still 'translating' with exact binding
     conn = connect(settings)
     try:
         rows = conn.execute(
             "SELECT tr.id, tr.request_code, tr.generation_job_code, tr.attempt_count "
             "FROM translation_requests tr "
-            "JOIN generation_tasks gt ON gt.fast_translation_request_code = tr.request_code "
-            "WHERE tr.status = 'processing' AND tr.started_at < ? "
-            "AND gt.status = 'translating' "
-            "AND gt.fast_translation_request_code = tr.request_code",
+            "JOIN generation_tasks gt ON gt.job_code = tr.generation_job_code "
+            "  AND gt.fast_translation_request_code = tr.request_code "
+            "  AND gt.status = 'translating' "
+            "  AND gt.translation_mode = 'fast' "
+            "WHERE tr.status = 'processing' AND tr.started_at < ?",
             (stale_before,),
         ).fetchall()
     finally:
@@ -110,11 +115,20 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
         job_code = str(row_dict.get("generation_job_code") or "")
         request_code = str(row_dict.get("request_code") or "")
 
-        if attempt < FAST_TRANSLATION_MAX_ATTEMPTS:
+        if attempt < max_attempts:
             # Requeue: processing → queued, clear started_at
+            # Re-verify generation task is still translating with exact binding
             conn = connect(settings)
             try:
                 conn.execute("BEGIN IMMEDIATE")
+                gt_check = conn.execute(
+                    "SELECT 1 FROM generation_tasks "
+                    "WHERE job_code=? AND fast_translation_request_code=? AND status='translating' AND translation_mode='fast'",
+                    (job_code, request_code),
+                ).fetchone()
+                if not gt_check:
+                    conn.commit()
+                    continue
                 cur = conn.execute(
                     "UPDATE translation_requests SET status='queued', started_at=NULL, error_code='stale_requeued' "
                     "WHERE id=? AND status='processing'",
@@ -128,24 +142,107 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
             finally:
                 conn.close()
         else:
-            # Max attempts exceeded: fail and refund (separate atomic transaction)
+            # Max attempts exceeded: fail and refund
+            # Re-verify generation task is still translating
             if job_code:
+                conn = connect(settings)
                 try:
-                    fail_fast_translation_task_refund_atomic(
-                        settings,
-                        job_code=job_code,
-                        error_code="fast_translate_stale_max_attempts",
-                    )
-                    failed += 1
+                    gt_check = conn.execute(
+                        "SELECT 1 FROM generation_tasks "
+                        "WHERE job_code=? AND fast_translation_request_code=? AND status='translating'",
+                        (job_code, request_code),
+                    ).fetchone()
+                    if gt_check:
+                        fail_fast_translation_task_refund_atomic(
+                            settings,
+                            job_code=job_code,
+                            error_code="fast_translate_stale_max_attempts",
+                        )
+                        failed += 1
                 except Exception:
                     pass
+                finally:
+                    conn.close()
 
-    if requeued or failed:
+    # Step 3: Terminal state reconciliation
+    # Orphaned processing translation requests whose generation tasks are in terminal states
+    reconciled = 0
+    conn = connect(settings)
+    try:
+        orphans = conn.execute(
+            "SELECT tr.id, tr.request_code, gt.status AS gt_status "
+            "FROM translation_requests tr "
+            "JOIN generation_tasks gt ON gt.job_code = tr.generation_job_code "
+            "  AND gt.fast_translation_request_code = tr.request_code "
+            "WHERE tr.status = 'processing' "
+            "AND gt.status IN ('cancelled_refunded', 'failed_refunded')",
+        ).fetchall()
+        for orphan in orphans:
+            orphan_dict = dict(orphan)
+            gt_status = str(orphan_dict["gt_status"] or "")
+            target_status = gt_status  # cancelled_refunded or failed_refunded
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = conn.execute(
+                    "UPDATE translation_requests SET status=?, finished_at=? "
+                    "WHERE id=? AND status='processing'",
+                    (target_status, int(time.time()), orphan_dict["id"]),
+                )
+                if cur.rowcount == 1:
+                    reconciled += 1
+                conn.commit()
+            except Exception:
+                conn.rollback()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+    if requeued or failed or reconciled:
         print(
-            f"[FAST_TRANSLATION_WORKER] recovery: requeued={requeued} failed={failed}",
+            f"[FAST_TRANSLATION_WORKER] recovery: requeued={requeued} failed={failed} reconciled={reconciled}",
             flush=True,
         )
-    return requeued + failed
+    return requeued + failed + reconciled
+
+
+def fail_unserviceable_fast_translation_tasks(settings: Settings) -> int:
+    """Fail fast translation tasks that cannot be processed due to missing runtime."""
+    conn = connect(settings)
+    try:
+        rows = conn.execute(
+            "SELECT tr.id, tr.request_code, tr.generation_job_code "
+            "FROM translation_requests tr "
+            "JOIN generation_tasks gt ON gt.job_code = tr.generation_job_code "
+            "  AND gt.fast_translation_request_code = tr.request_code "
+            "  AND gt.status = 'translating' "
+            "  AND gt.translation_mode = 'fast' "
+            "WHERE tr.status IN ('queued', 'processing')",
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return 0
+
+    failed = 0
+    for row in rows:
+        row_dict = dict(row)
+        job_code = str(row_dict.get("generation_job_code") or "")
+        if job_code:
+            try:
+                fail_fast_translation_task_refund_atomic(
+                    settings,
+                    job_code=job_code,
+                    error_code="fast_translator_unavailable",
+                )
+                failed += 1
+            except Exception:
+                pass
+
+    if failed:
+        print(f"[FAST_TRANSLATION_WORKER] failed {failed} unserviceable tasks", flush=True)
+    return failed
 
 
 def complete_fast_translation(
@@ -210,25 +307,28 @@ def complete_fast_translation(
 async def fast_translation_worker_loop(settings: Settings) -> None:
     """Main worker loop: poll for fast translation tasks and process them."""
     poll_interval = max(1, int(getattr(settings, "mock_worker_poll_seconds", 2)))
-    recovery_interval = 30  # seconds between recovery runs
+    recovery_interval = max(5, int(getattr(settings, "fast_translation_recovery_interval_seconds", 30) or 30))
     last_recovery = 0
     first_run = True
     print("[FAST_TRANSLATION_WORKER] started", flush=True)
 
     while True:
         try:
-            if not settings.fast_translator_enabled or not settings.deepseek_api_key:
-                await asyncio.sleep(5)
-                continue
-
+            # Always run recovery first, even without key
             now_ts = int(time.time())
-            # Run recovery before first claim, then periodically
             if first_run or now_ts - last_recovery >= recovery_interval:
                 recovered = await asyncio.to_thread(recover_stale_fast_translation_tasks, settings)
                 if recovered:
                     print(f"[FAST_TRANSLATION_WORKER] recovery processed {recovered} stale tasks", flush=True)
                 last_recovery = now_ts
                 first_run = False
+
+            # Skip claiming new tasks if runtime unavailable
+            if not settings.fast_translator_enabled or not str(settings.deepseek_api_key or "").strip():
+                # Fail any existing tasks that can't be processed
+                await asyncio.to_thread(fail_unserviceable_fast_translation_tasks, settings)
+                await asyncio.sleep(5)
+                continue
 
             task = await asyncio.to_thread(claim_next_fast_translation, settings)
             if not task:

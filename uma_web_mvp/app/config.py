@@ -155,6 +155,9 @@ class Settings(BaseSettings):
     deepseek_max_retries: int = 2
     fast_translator_enabled: bool = False
     fast_translator_cost_credits: int = 2
+    fast_translation_claim_ttl_seconds: int = 180
+    fast_translation_max_attempts: int = 2
+    fast_translation_recovery_interval_seconds: int = 30
     ai_support_enabled: bool = False
     ai_support_max_history: int = 20
     ai_support_rate_limit_per_minute: int = 10
@@ -258,6 +261,21 @@ class Settings(BaseSettings):
     @classmethod
     def strip_origin(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("fast_translation_claim_ttl_seconds")
+    @classmethod
+    def validate_claim_ttl(cls, value: int) -> int:
+        return max(30, min(3600, value))
+
+    @field_validator("fast_translation_max_attempts")
+    @classmethod
+    def validate_max_attempts(cls, value: int) -> int:
+        return max(1, min(5, value))
+
+    @field_validator("fast_translation_recovery_interval_seconds")
+    @classmethod
+    def validate_recovery_interval(cls, value: int) -> int:
+        return max(5, min(300, value))
 
     @property
     def smtp_from_address(self) -> str:

@@ -948,8 +948,8 @@ def create_task_atomic(
                 client_request_id,style_key,lora_weight,width,height,
                 generation_mode,input_image_path,denoise,control_type,control_character,auto_tagger,
                 workflow_key,prompt_source,character_key,mock_result,charged_fen,status,created_at,source,
-                translation_mode,request_fingerprint
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web', ?, ?)
+                translation_mode,request_fingerprint,queued_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued', ?, 'web', ?, ?, ?)
             """,
             (
                 job_code, user_id, username[:120], None, prompt, (original_prompt or prompt), None if use_agent else prompt,
@@ -957,7 +957,7 @@ def create_task_atomic(
                 mode, input_image_path, float(denoise), control_type, control_character,
                 1 if auto_tagger else 0, style_key, str(prompt_source or "")[:120],
                 _validate_character_key(character_key), str(mock_result or "")[:20], charged_fen, now,
-                str(translation_mode or "none")[:20], str(request_fingerprint or "")[:128],
+                str(translation_mode or "none")[:20], str(request_fingerprint or "")[:128], now,
             ),
         )
         conn.commit()

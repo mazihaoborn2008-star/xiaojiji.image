@@ -1043,8 +1043,8 @@ class TestSchemaQueuedAt:
         finally:
             conn.close()
 
-    def test_queued_at_default_null(self, tmp_path):
-        """New tasks have queued_at=NULL."""
+    def test_queued_at_set_for_normal_tasks(self, tmp_path):
+        """Normal queued tasks have queued_at=created_at."""
         settings = _make_settings(tmp_path)
         _seed_balance(settings, TEST_USER_A, 50000)
 
@@ -1061,7 +1061,8 @@ class TestSchemaQueuedAt:
             auto_tagger=False,
         )
         task = _get_task(settings, result["job_code"])
-        assert task["queued_at"] is None
+        assert task["queued_at"] is not None
+        assert task["queued_at"] == task["created_at"]
 
 
 # ============================================================

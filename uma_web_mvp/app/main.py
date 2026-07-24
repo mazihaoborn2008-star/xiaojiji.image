@@ -6082,7 +6082,7 @@ async def create_task(
     original_prompt: str | None = Form(default=None),
     prompt_source: str | None = Form(default=None),
     fast_translation_request_code: str | None = Form(default=None),
-    translation_mode: str = Form(""),  # server decides the real mode
+    translation_mode: str | None = Form(default=None),  # server decides the real mode
     mock_result: str | None = Form(default=None),
     input_image: UploadFile | None = File(default=None),
     csrf: None = Depends(require_csrf),
@@ -6111,14 +6111,25 @@ async def create_task(
     input_path = None
 
     # Server determines translation_mode, not client
-    _raw_tm = str(translation_mode or "").strip().lower()
-    if _raw_tm in {"none", "normal", "fast"}:
-        server_translation_mode = _raw_tm
-    elif bool(use_agent) and s.agent_enabled:
-        # Legacy client: use_agent=true without explicit translation_mode
+    _raw_tm = str(translation_mode or "").strip().lower() if translation_mode is not None else ""
+    if _raw_tm == "fast":
+        server_translation_mode = "fast"
+    elif _raw_tm == "normal":
+        if not s.agent_enabled:
+            raise HTTPException(status_code=503, detail={"code": "normal_translation_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
         server_translation_mode = "normal"
-    else:
+    elif _raw_tm == "none":
         server_translation_mode = "none"
+    elif _raw_tm == "":
+        # Legacy client: no translation_mode sent
+        if bool(use_agent):
+            if not s.agent_enabled:
+                raise HTTPException(status_code=503, detail={"code": "normal_translation_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
+            server_translation_mode = "normal"
+        else:
+            server_translation_mode = "none"
+    else:
+        raise HTTPException(status_code=400, detail={"code": "invalid_translation_mode", "message": "翻译模式无效。"})
 
     # Fast translation path: single atomic call
     if server_translation_mode == "fast":
