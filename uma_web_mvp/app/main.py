@@ -766,6 +766,18 @@ def admin_image_refunds_page(
     return FileResponse(STATIC_DIR / "admin-image-refunds.html")
 
 
+@app.get("/ai-support")
+def ai_support_page(
+    user: UserSession | None = Depends(get_current_user_optional),
+    s: Settings = Depends(get_settings),
+):
+    if user is None:
+        return RedirectResponse(url="/login", status_code=302)
+    if not s.ai_support_enabled:
+        raise HTTPException(status_code=404, detail="功能未开放")
+    return FileResponse(STATIC_DIR / "ai-support.html")
+
+
 @app.get("/smart-agent")
 def smart_agent_page(user: UserSession | None = Depends(get_current_user_optional), s: Settings = Depends(get_settings)):
     if user is None:

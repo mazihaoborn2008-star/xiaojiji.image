@@ -1720,10 +1720,12 @@ async function loadMe(){
       if (me.ai_support_enabled) {
         smartLink.dataset.i18n = 'nav.ai_support';
         smartLink.textContent = t('nav.ai_support', 'AI 客服');
+        smartLink.href = '/ai-support';
         smartLink.classList.remove('hidden');
       } else if (me.smart_agent_enabled) {
         smartLink.dataset.i18n = 'nav.smart_agent';
         smartLink.textContent = t('nav.smart_agent', '智能 Agent');
+        smartLink.href = '/smart-agent';
         smartLink.classList.remove('hidden');
       } else {
         smartLink.classList.add('hidden');
