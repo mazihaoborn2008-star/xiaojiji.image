@@ -452,3 +452,219 @@ class TestRecoveryEdgeCases:
         settings = _make_settings(tmp_path)
         recovered = recover_stale_fast_translation_tasks(settings)
         assert recovered == 0
+
+
+class TestTerminalReconciliation:
+    """Terminal state reconciliation runs even without stale candidates."""
+
+    def test_cancelled_orphan_reconciled(self, tmp_path):
+        """Orphaned processing TR with cancelled GT → reconciled."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"TOC-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+        bal_before = _get_balance(settings, TEST_USER)
+
+        # Claim it → processing
+        claim_next_fast_translation(settings)
+
+        # Directly set GT to cancelled_refunded (simulates race where cancel updated GT but TR stayed processing)
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET status='cancelled_refunded', finished_at=? WHERE job_code=?",
+                (int(time.time()), gen["job_code"]),
+            )
+            conn.execute(
+                "UPDATE translation_requests SET started_at=? WHERE request_code=?",
+                (int(time.time()) - FAST_TRANSLATION_CLAIM_TTL - 10, gen["request_code"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Recovery should reconcile (no stale translating candidates, but orphaned processing exists)
+        recovered = recover_stale_fast_translation_tasks(settings)
+        assert recovered == 1
+
+        # TR should be cancelled_refunded
+        tr = _get_tr(settings, gen["request_code"])
+        assert tr["status"] == "cancelled_refunded"
+
+        # No new refund ledger
+        assert _count_ledger(settings, TEST_USER, "generate_cancel_refund") == 0
+
+    def test_failed_orphan_reconciled(self, tmp_path):
+        """Orphaned processing TR with failed GT → reconciled."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"TOF-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+        bal_before = _get_balance(settings, TEST_USER)
+
+        # Claim it
+        claim_next_fast_translation(settings)
+
+        # Directly set GT to failed_refunded and keep TR as processing
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET status='failed_refunded', finished_at=?, error_code='test_fail' WHERE job_code=?",
+                (int(time.time()), gen["job_code"]),
+            )
+            conn.execute(
+                "UPDATE translation_requests SET started_at=? WHERE request_code=?",
+                (int(time.time()) - FAST_TRANSLATION_CLAIM_TTL - 10, gen["request_code"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Recovery should reconcile
+        recovered = recover_stale_fast_translation_tasks(settings)
+        assert recovered == 1
+
+        tr = _get_tr(settings, gen["request_code"])
+        assert tr["status"] == "failed_refunded"
+
+        # Balance unchanged (GT was already failed_refunded, no new refund)
+        assert _get_balance(settings, TEST_USER) == bal_before
+
+
+class TestClaimExactBinding:
+    """Claim requires exact binding: job_code, request_code, translation_mode."""
+
+    def test_wrong_job_code_returns_none(self, tmp_path):
+        """request_code correct but generation_job_code wrong → claim None."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"JC-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+
+        # Corrupt generation_job_code in TR
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE translation_requests SET generation_job_code='WRONG' WHERE request_code=?",
+                (gen["request_code"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        task = claim_next_fast_translation(settings)
+        assert task is None
+
+    def test_wrong_request_code_returns_none(self, tmp_path):
+        """generation_job_code correct but fast_translation_request_code wrong → claim None."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"RC-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+
+        # Corrupt fast_translation_request_code in GT
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET fast_translation_request_code='WRONG' WHERE job_code=?",
+                (gen["job_code"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        task = claim_next_fast_translation(settings)
+        assert task is None
+
+    def test_non_fast_mode_returns_none(self, tmp_path):
+        """translation_mode=none → claim None."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"NF-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+
+        # Change translation_mode to none
+        conn = connect(settings)
+        try:
+            conn.execute(
+                "UPDATE generation_tasks SET translation_mode='none' WHERE job_code=?",
+                (gen["job_code"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        task = claim_next_fast_translation(settings)
+        assert task is None
+
+    def test_exact_binding_succeeds(self, tmp_path):
+        """Exact binding with fast mode → claim succeeds."""
+        settings = _make_settings(tmp_path)
+        _seed_balance(settings, TEST_USER, 50000)
+
+        gen = create_fast_translation_task_atomic(
+            settings,
+            job_code=f"EB-{uuid.uuid4().hex[:8].upper()}",
+            user_id=TEST_USER, username="Test",
+            original_prompt="blue sky", translation_mode="fast",
+            style_key="style_a", lora_weight=1.0,
+            width=1024, height=1024, mode="txt2img",
+            input_image_path=None, denoise=0.5,
+            control_type="depth", control_character="prompt",
+            auto_tagger=False,
+        )
+
+        task = claim_next_fast_translation(settings)
+        assert task is not None
+        assert task["request_code"] == gen["request_code"]
+        assert task["job_code"] == gen["job_code"]

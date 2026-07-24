@@ -38,10 +38,11 @@ def claim_next_fast_translation(settings: Settings) -> dict[str, Any] | None:
                    tr.attempt_count, tr.generation_job_code,
                    gt.job_code, gt.user_id, gt.status AS gt_status
             FROM translation_requests tr
-            JOIN generation_tasks gt ON gt.fast_translation_request_code = tr.request_code
-            WHERE gt.status = 'translating'
+            JOIN generation_tasks gt ON gt.job_code = tr.generation_job_code
               AND gt.fast_translation_request_code = tr.request_code
-              AND (
+              AND gt.status = 'translating'
+              AND gt.translation_mode = 'fast'
+            WHERE (
                     (tr.status = 'queued')
                     OR
                     (tr.status = 'processing' AND tr.started_at < ? AND tr.attempt_count < ?)
@@ -101,9 +102,6 @@ def recover_stale_fast_translation_tasks(settings: Settings) -> int:
         ).fetchall()
     finally:
         conn.close()
-
-    if not rows:
-        return 0
 
     requeued = 0
     failed = 0
