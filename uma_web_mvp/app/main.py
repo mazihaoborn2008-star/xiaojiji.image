@@ -38,6 +38,7 @@ from .recharge_service import (
     PAYMENT_METHOD_ASB,
     cancel_recharge_request,
     create_recharge_request_for_identity,
+    ensure_recharge_schema,
     find_pending_topup_for_user,
     get_recharge_request as get_recharge_order,
     list_recharge_requests_for_user,
@@ -608,6 +609,7 @@ async def startup() -> None:
     settings.validate_runtime()
     settings.validate_local_isolation()
     ensure_schema(settings)
+    ensure_recharge_schema(settings.balance_db)
     settings.input_image_dir.mkdir(parents=True, exist_ok=True)
     settings.bot_output_dir.mkdir(parents=True, exist_ok=True)
     conn = connect(settings)

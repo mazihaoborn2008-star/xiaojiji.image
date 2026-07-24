@@ -81,6 +81,8 @@ def ensure_recharge_schema(db_path: Path | str) -> None:
             "credits": "INTEGER",
             "expires_at": "INTEGER",
             "paid_expires_at": "INTEGER",
+            "cancelled_at": "INTEGER",
+            "cancel_reason": "TEXT",
         }
         for name, ddl in additions.items():
             if name not in columns:
