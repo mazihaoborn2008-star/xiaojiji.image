@@ -6118,7 +6118,7 @@ async def create_task(
         server_translation_mode = "fast"
     elif _raw_tm == "normal":
         if not s.agent_enabled:
-            raise HTTPException(status_code=503, detail={"code": "normal_translation_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
+            raise HTTPException(status_code=503, detail={"code": "agent_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
         server_translation_mode = "normal"
     elif _raw_tm == "none":
         server_translation_mode = "none"
@@ -6126,7 +6126,7 @@ async def create_task(
         # Legacy client: no translation_mode sent
         if bool(use_agent):
             if not s.agent_enabled:
-                raise HTTPException(status_code=503, detail={"code": "normal_translation_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
+                raise HTTPException(status_code=503, detail={"code": "agent_unavailable", "message": "普通翻译当前不可用，请稍后重试。"})
             server_translation_mode = "normal"
         else:
             server_translation_mode = "none"
@@ -6212,9 +6212,15 @@ async def create_task(
             return result
         except RuntimeError as exc:
             err_msg = str(exc)
-            if err_msg == "active_task_limit":
+            if err_msg in {"active_task_limit", "too_many_active_tasks"}:
                 safe_cleanup_input(s, input_path)
-                raise HTTPException(status_code=429, detail={"code": "active_task_limit", "message": "你当前未完成的任务太多，请等待或取消后再提交"}) from exc
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "too_many_active_tasks",
+                        "message": "你当前未完成的任务已达到10个，请等待任务完成或取消后再提交。",
+                    },
+                ) from exc
             if err_msg == "generation_rate_limited":
                 safe_cleanup_input(s, input_path)
                 raise HTTPException(status_code=429, detail={"code": "generation_rate_limited", "message": "提交过于频繁，请稍后重试"}) from exc
@@ -6301,7 +6307,10 @@ async def create_task(
         if not _is_dedup:
             limiter.check(
                 f"create:{user.user_id}",
-                limit=max(1, int(getattr(s, 'generation_submit_user_limit', 20) or 20)),
+                limit=max(
+                    20,
+                    int(getattr(s, 'generation_submit_user_limit', 20) or 20),
+                ),
                 window_seconds=max(1, int(getattr(s, 'generation_submit_window_seconds', 60) or 60)),
             )
         # Compute fingerprint for idempotency conflict detection
@@ -6373,7 +6382,24 @@ async def create_task(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         safe_cleanup_input(s, input_path)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        err_msg = str(exc)
+        if err_msg == "too_many_active_tasks":
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "too_many_active_tasks",
+                    "message": "你当前未完成的任务已达到10个，请等待任务完成或取消后再提交。",
+                    },
+            ) from exc
+        if err_msg in {"当前全局队列已满", "queue_full"}:
+            raise HTTPException(status_code=429, detail={"code": "queue_full", "message": "当前生成队列已满，请稍后重试"}) from exc
+        if err_msg in {"余额不足", "insufficient_credits"}:
+            raise HTTPException(status_code=402, detail={"code": "insufficient_credits", "message": "Credits 不足，请充值后重试"}) from exc
+        if err_msg == "generation_rate_limited":
+            raise HTTPException(status_code=429, detail={"code": "generation_rate_limited", "message": "提交过于频繁，请稍后重试"}) from exc
+        if err_msg == "client_request_id_conflict":
+            raise HTTPException(status_code=409, detail={"code": "client_request_id_conflict", "message": "The same client_request_id was already used with different request content."}) from exc
+        raise HTTPException(status_code=400, detail={"code": "validation_error", "message": "提交内容格式有误，请检查后重试"}) from exc
     except Exception:
         safe_cleanup_input(s, input_path)
         raise

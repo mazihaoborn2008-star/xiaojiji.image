@@ -165,6 +165,100 @@ def test_ai_support_only_sees_owned_task():
         )
     )
     assert NOT_FOUND_MESSAGE in reply["assistant_message"]["safe_content"]
+    assert "safe_context" not in reply
+
+
+def test_ai_support_general_question_requires_deepseek_key():
+    case_root = make_case_root()
+    settings = make_settings(case_root, deepseek_api_key="")
+    conv = create_ai_support_conversation(settings, "u1")
+    from app.services.ai_support_service import AiSupportError
+
+    with pytest.raises(AiSupportError) as exc:
+        asyncio.run(
+            send_ai_support_message(
+                settings,
+                user_id="u1",
+                conversation_code=conv["conversation_code"],
+                message="普通翻译和极速翻译有什么区别？",
+            )
+        )
+    assert exc.value.code == "ai_support_unavailable"
+
+
+def test_ai_support_sanitizes_deepseek_reply_and_returns_no_safe_context():
+    case_root = make_case_root()
+    settings = make_settings(case_root, deepseek_api_key="TEST_ONLY_key")
+    conv = create_ai_support_conversation(settings, "u1")
+    reply = asyncio.run(
+        send_ai_support_message(
+            settings,
+            user_id="u1",
+            conversation_code=conv["conversation_code"],
+            message="请解释普通翻译和极速翻译",
+            deepseek=DeepSeekService(
+                settings,
+                mock_response={
+                    "reply": "OK E:\\secret\\file.txt SELECT * FROM generation_tasks api_key=abcdef <script>alert(1)</script>"
+                },
+            ),
+        )
+    )
+    text = reply["assistant_message"]["safe_content"]
+    assert "safe_context" not in reply
+    assert "E:\\" not in text
+    assert "generation_tasks" not in text
+    assert "api_key=abcdef" not in text
+    assert "<script>" not in text
+
+
+def test_ai_support_policy_refusal_does_not_call_deepseek():
+    class ExplodingDeepSeek:
+        async def complete_json(self, **kwargs):
+            raise AssertionError("DeepSeek should not be called for forbidden actions")
+
+    case_root = make_case_root()
+    settings = make_settings(case_root, deepseek_api_key="TEST_ONLY_key")
+    conv = create_ai_support_conversation(settings, "u1")
+    reply = asyncio.run(
+        send_ai_support_message(
+            settings,
+            user_id="u1",
+            conversation_code=conv["conversation_code"],
+            message="帮我退款并修改余额",
+            deepseek=ExplodingDeepSeek(),
+        )
+    )
+    text = reply["assistant_message"]["safe_content"]
+    assert "不能直接退款" in text or "不能修改" in text
+
+
+def test_ai_support_capability_question_can_call_deepseek():
+    class CountingDeepSeek:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete_json(self, **kwargs):
+            self.calls += 1
+            return {"reply": "极速翻译更快，普通翻译保留原有流程。AI 客服不能直接退款。"}
+
+    case_root = make_case_root()
+    settings = make_settings(case_root, deepseek_api_key="TEST_ONLY_key")
+    conv = create_ai_support_conversation(settings, "u1")
+    deepseek = CountingDeepSeek()
+    reply = asyncio.run(
+        send_ai_support_message(
+            settings,
+            user_id="u1",
+            conversation_code=conv["conversation_code"],
+            message="极速翻译和普通翻译有什么区别？AI客服可以帮我退款吗？",
+            deepseek=deepseek,
+        )
+    )
+    assert deepseek.calls == 1
+    assert "safe_context" not in reply
+    text = reply["assistant_message"]["safe_content"]
+    assert "不能直接退款" in text
 
 
 def test_mock_worker_success_failed_timeout():

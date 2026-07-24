@@ -75,6 +75,7 @@ def _make_settings(case_root: Path, **overrides) -> Settings:
         "APP_ORIGIN": "http://127.0.0.1:18080",
         "HOST": "127.0.0.1",
         "PORT": 18080,
+        "port": 18080,
         "BALANCE_DB": str(test_root / "acceptance_test.db"),
         "BOT_OUTPUT_DIR": str(test_root / "output"),
         "mock_output_dir": str(test_root / "mock_output"),

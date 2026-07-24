@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .catalog import CONTROL_CHARACTER_KEYS, STYLE_BY_KEY
 from .config import Settings
+from .provider_error_codes import sanitize_public_error_code
 
 MIN_ACTIVE_REMAINING_SECONDS = 3
 SMART_AGENT_CHARGE_REASON = "smart_agent_charge"
@@ -39,10 +40,24 @@ SMART_AGENT_REFUND_REASON = "smart_agent_refund"
 SMART_AGENT_UNINTENDED_REFUND_REASON = "smart_agent_unintended_generation_refund"
 SEVERE_DEFORMATION_REFUND_REASON = "severe_deformation_auto_refund"
 SMART_AGENT_STATUS = "smart_planning"
-ACTIVE_STATUSES_SQL = "'smart_planning','queued','translating','processing'"
+ACTIVE_STATUSES_SQL = "'pending','smart_planning','queued','translating','processing'"
 
 ALLOWED_MODES = {"txt2img", "img2img", "controlnet"}
 ALLOWED_CONTROL_TYPES = {"depth", "pose"}
+
+
+def _effective_submit_limit(settings: Settings) -> int:
+    return max(
+        20,
+        int(settings.generation_submit_user_limit or 20),
+    )
+
+
+def _effective_global_queue_limit(settings: Settings) -> int:
+    return max(
+        10,
+        int(settings.max_queue_size or 20),
+    )
 
 
 def connect(settings: Settings) -> sqlite3.Connection:
@@ -902,17 +917,17 @@ def create_task_atomic(
                     "deduped": True,
                 }
 
-        global_open = int(conn.execute(
-            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
-        ).fetchone()[0])
-        if global_open >= settings.max_queue_size:
-            raise RuntimeError("当前全局队列已满")
         user_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES_SQL})",
             (user_id,),
         ).fetchone()[0])
         if user_open >= settings.max_active_tasks_per_user:
-            raise RuntimeError("你当前未完成的任务太多，请等待或取消后再提交")
+            raise RuntimeError("too_many_active_tasks")
+        global_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
+        ).fetchone()[0])
+        if global_open >= _effective_global_queue_limit(settings):
+            raise RuntimeError("当前全局队列已满")
 
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
         if charged_fen:
@@ -1165,18 +1180,18 @@ def create_fast_translation_task_atomic(
                 }
 
         # 2. Active task limit
-        ACTIVE_STATUSES = "'smart_planning','translating','queued','processing'"
+        ACTIVE_STATUSES = ACTIVE_STATUSES_SQL
         user_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES})",
             (user_id,),
         ).fetchone()[0])
         if user_open >= settings.max_active_tasks_per_user:
             conn.rollback()
-            raise RuntimeError("active_task_limit")
+            raise RuntimeError("too_many_active_tasks")
 
         # 3. 20/60 rate limit (DB-authoritative)
         window = max(1, int(settings.generation_submit_window_seconds or 60))
-        limit = max(1, int(settings.generation_submit_user_limit or 20))
+        limit = _effective_submit_limit(settings)
         cutoff = now - window
         recent_count = int(conn.execute(
             "SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND created_at>=?",
@@ -1190,7 +1205,7 @@ def create_fast_translation_task_atomic(
         global_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES})"
         ).fetchone()[0])
-        if global_open >= settings.max_queue_size:
+        if global_open >= _effective_global_queue_limit(settings):
             conn.rollback()
             raise RuntimeError("queue_full")
 
@@ -1329,6 +1344,7 @@ def fail_fast_translation_task_refund_atomic(
     Idempotent: duplicate calls are no-op.
     """
     now = int(time.time())
+    public_error_code = sanitize_public_error_code(error_code)
     conn = connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1376,7 +1392,7 @@ def fail_fast_translation_task_refund_atomic(
         cur = conn.execute(
             "UPDATE generation_tasks SET status='failed_refunded', finished_at=?, error=?, error_code=? "
             "WHERE job_code=? AND status='translating'",
-            (now, error_code, error_code, job_code),
+            (now, public_error_code, public_error_code, job_code),
         )
         if cur.rowcount != 1:
             conn.rollback()
@@ -1386,7 +1402,7 @@ def fail_fast_translation_task_refund_atomic(
         if tr:
             conn.execute(
                 "UPDATE translation_requests SET status='failed_refunded', finished_at=?, error_code=? WHERE id=?",
-                (now, error_code, tr["id"]),
+                (now, public_error_code, tr["id"]),
             )
 
         # Refund generation charge
@@ -1638,17 +1654,17 @@ def create_smart_agent_task_atomic(
                 }
 
         # ── Queue limits ──
-        global_open = int(conn.execute(
-            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
-        ).fetchone()[0])
-        if global_open >= settings.max_queue_size:
-            raise RuntimeError("当前全局队列已满")
         user_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES_SQL})",
             (user_id,),
         ).fetchone()[0])
         if user_open >= settings.max_active_tasks_per_user:
-            raise RuntimeError("你当前未完成的任务太多，请等待或取消后再提交")
+            raise RuntimeError("too_many_active_tasks")
+        global_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
+        ).fetchone()[0])
+        if global_open >= _effective_global_queue_limit(settings):
+            raise RuntimeError("当前全局队列已满")
 
         # ── Balance deduction (same transaction) ──
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
@@ -1789,17 +1805,17 @@ def create_smart_agent_queued_task_atomic(
                     }
                 conn.commit()
                 return {"job_code": job_code, "charged_fen": charged_fen, "status": "queued", "deduped": True}
-        global_open = int(conn.execute(
-            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
-        ).fetchone()[0])
-        if global_open >= settings.max_queue_size:
-            raise RuntimeError("当前全局队列已满")
         user_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES_SQL})",
             (user_id,),
         ).fetchone()[0])
         if user_open >= settings.max_active_tasks_per_user:
-            raise RuntimeError("你当前未完成的任务太多，请等待或取消后再提交")
+            raise RuntimeError("too_many_active_tasks")
+        global_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
+        ).fetchone()[0])
+        if global_open >= _effective_global_queue_limit(settings):
+            raise RuntimeError("当前全局队列已满")
 
         conn.execute("INSERT OR IGNORE INTO users(user_id, balance_fen) VALUES (?, 0)", (user_id,))
         cur = conn.execute(
@@ -1997,17 +2013,17 @@ def confirm_smart_agent_prompt_draft_atomic(
                 "prompt_version": int(draft["prompt_version"] or 1),
             }
 
-        global_open = int(conn.execute(
-            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
-        ).fetchone()[0])
-        if global_open >= settings.max_queue_size:
-            raise RuntimeError("当前全局队列已满")
         user_open = int(conn.execute(
             f"SELECT COUNT(*) FROM generation_tasks WHERE user_id=? AND status IN ({ACTIVE_STATUSES_SQL})",
             (user_id,),
         ).fetchone()[0])
         if user_open >= settings.max_active_tasks_per_user:
-            raise RuntimeError("你当前未完成的任务太多，请等待或取消后再提交")
+            raise RuntimeError("too_many_active_tasks")
+        global_open = int(conn.execute(
+            f"SELECT COUNT(*) FROM generation_tasks WHERE status IN ({ACTIVE_STATUSES_SQL})"
+        ).fetchone()[0])
+        if global_open >= _effective_global_queue_limit(settings):
+            raise RuntimeError("当前全局队列已满")
 
         prompt = str(draft["prompt_draft"] or "").strip()
         if not prompt:

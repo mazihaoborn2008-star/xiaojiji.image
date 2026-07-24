@@ -22,7 +22,9 @@ PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-AGENT_SEMAPHORE = asyncio.Semaphore(1)
+AGENT_SEMAPHORE: asyncio.Semaphore | None = None
+AGENT_SEMAPHORE_LIMIT = 0
+RETRYABLE_AGENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 BASE_SYSTEM_PROMPT = """
 You are a prompt converter for anime image generation models.
@@ -166,8 +168,9 @@ async def refine_prompt(
 ) -> str:
     if not settings.agent_enabled:
         raise RuntimeError("Agent 未启用")
+    semaphore = _get_agent_semaphore(settings)
     try:
-        await asyncio.wait_for(AGENT_SEMAPHORE.acquire(), timeout=0.01)
+        await asyncio.wait_for(semaphore.acquire(), timeout=_agent_acquire_timeout(settings))
     except asyncio.TimeoutError as exc:
         raise RuntimeError("Agent 正忙，请稍后再试") from exc
     try:
@@ -182,7 +185,59 @@ async def refine_prompt(
             disable_character_library=disable_character_library,
         )
     finally:
-        AGENT_SEMAPHORE.release()
+        semaphore.release()
+
+
+def _agent_concurrency_limit(settings: Settings) -> int:
+    try:
+        return max(1, int(settings.agent_max_concurrency or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _agent_acquire_timeout(settings: Settings) -> float:
+    try:
+        configured_timeout = float(settings.agent_timeout_seconds or 30)
+    except (TypeError, ValueError):
+        configured_timeout = 30.0
+    return min(10.0, max(2.0, configured_timeout * 0.2))
+
+
+def _get_agent_semaphore(settings: Settings) -> asyncio.Semaphore:
+    global AGENT_SEMAPHORE, AGENT_SEMAPHORE_LIMIT
+    limit = _agent_concurrency_limit(settings)
+    if AGENT_SEMAPHORE is None or AGENT_SEMAPHORE_LIMIT != limit:
+        AGENT_SEMAPHORE = asyncio.Semaphore(limit)
+        AGENT_SEMAPHORE_LIMIT = limit
+    return AGENT_SEMAPHORE
+
+
+async def _post_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    attempts: int = 2,
+    **kwargs,
+) -> httpx.Response:
+    last_exc: BaseException | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            response = await client.post(url, **kwargs)
+            if (
+                response.status_code in RETRYABLE_AGENT_HTTP_STATUSES
+                and attempt + 1 < max(1, attempts)
+            ):
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            return response
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            last_exc = exc
+            if attempt + 1 >= max(1, attempts):
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Agent 暂时不可用，请稍后再试")
 
 
 def _strip_mistranslated_character_names(refined_prompt: str, character: dict) -> str:
@@ -382,10 +437,13 @@ async def _refine_prompt_ollama(settings: Settings, text: str) -> str:
     }
     timeout = max(int(settings.agent_timeout_seconds), 10)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=payload)
+        response = await _post_with_retries(client, url, json=payload)
         if response.status_code != 200:
             raise RuntimeError(f"Agent 返回 HTTP {response.status_code}")
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Agent 返回格式不兼容 Ollama /api/chat") from exc
         try:
             content = data["message"]["content"].strip()
         except Exception as exc:
@@ -429,10 +487,13 @@ async def _refine_prompt_openai_compatible(settings: Settings, text: str) -> str
     }
     timeout = max(int(settings.agent_timeout_seconds), 10)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, headers=headers, json=payload)
+        response = await _post_with_retries(client, url, headers=headers, json=payload)
     if response.status_code != 200:
         raise RuntimeError(f"Agent 返回 HTTP {response.status_code}")
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Agent 返回格式不兼容 OpenAI chat/completions") from exc
     try:
         content = data["choices"][0]["message"]["content"].strip()
     except Exception as exc:

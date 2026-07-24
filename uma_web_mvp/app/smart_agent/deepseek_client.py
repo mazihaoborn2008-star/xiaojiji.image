@@ -7,10 +7,25 @@ from typing import Any
 import httpx
 
 from app.config import Settings
+from app.provider_error_codes import classify_deepseek_failure
 
 
 class DeepSeekError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str = "deepseek_unavailable",
+        *,
+        code: str | None = None,
+        internal_code: str | None = None,
+        http_status: int | None = None,
+        exception_type: str = "",
+    ):
+        public_code = code or message or "deepseek_unavailable"
+        super().__init__(public_code)
+        self.code = public_code[:80]
+        self.internal_code = (internal_code or public_code)[:120]
+        self.http_status = http_status
+        self.exception_type = exception_type[:80]
 
 
 async def complete_json(
@@ -65,7 +80,14 @@ async def complete_json(
             last_error = exc
             if index + 1 < attempts:
                 await asyncio.sleep(1.2 * (index + 1))
-    raise DeepSeekError(str(last_error) if last_error else "deepseek_failed")
+    info = classify_deepseek_failure(last_error)
+    raise DeepSeekError(
+        info.public_code,
+        code=info.public_code,
+        internal_code=info.internal_code,
+        http_status=info.http_status,
+        exception_type=info.exception_type,
+    )
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

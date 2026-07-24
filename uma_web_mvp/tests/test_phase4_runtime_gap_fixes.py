@@ -1671,7 +1671,7 @@ class TestRelaxedLimits:
                 client_request_id=f"over-{i}-{uuid.uuid4().hex[:8]}",
             )
 
-        with pytest.raises(RuntimeError, match="未完成的任务太多"):
+        with pytest.raises(RuntimeError, match="too_many_active_tasks"):
             create_task_atomic(
                 settings,
                 job_code=f"GEN-OVER10-{uuid.uuid4().hex[:4].upper()}",

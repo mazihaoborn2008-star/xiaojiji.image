@@ -154,7 +154,7 @@ class TestActiveTaskLimit:
 
         balance_after_10 = _get_balance(s, TEST_USER_A)
 
-        with pytest.raises(RuntimeError, match="active_task_limit"):
+        with pytest.raises(RuntimeError, match="too_many_active_tasks"):
             _create_fast(s, TEST_USER_A, "one too many")
 
         assert _get_balance(s, TEST_USER_A) == balance_after_10
@@ -281,16 +281,16 @@ class TestInsufficientCredits:
 
 class TestGlobalQueueLimit:
     def test_global_limit_rejected(self, tmp_path):
-        s = _make_settings(tmp_path, max_queue_size=5, max_active_tasks_per_user=100)
+        s = _make_settings(tmp_path, max_queue_size=10, max_active_tasks_per_user=100)
         ensure_schema(s)
         _seed_user(s, TEST_USER_A)
 
-        for i in range(5):
+        for i in range(10):
             _create_fast(s, TEST_USER_A, f"p-{i}", cid=f"g-{i}")
 
         balance_after = _get_balance(s, TEST_USER_A)
 
         with pytest.raises(RuntimeError, match="queue_full"):
-            _create_fast(s, TEST_USER_A, "too many", cid="g-5")
+            _create_fast(s, TEST_USER_A, "too many", cid="g-too-many")
 
         assert _get_balance(s, TEST_USER_A) == balance_after

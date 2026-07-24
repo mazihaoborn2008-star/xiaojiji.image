@@ -858,7 +858,7 @@ class TestActiveTaskLimit:
 
         balance_after_10 = _get_balance(s, TEST_USER_A)
 
-        with pytest.raises(RuntimeError, match="active_task_limit"):
+        with pytest.raises(RuntimeError, match="too_many_active_tasks"):
             create_fast_translation_task_atomic(
                 s,
                 job_code=make_job_code(),

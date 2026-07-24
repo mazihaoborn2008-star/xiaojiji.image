@@ -5,6 +5,7 @@ from typing import Any
 
 from app.config import Settings
 from app.db import connect
+from app.provider_error_codes import sanitize_public_error_code
 
 JOB_CODE_RE = re.compile(r"\bGEN-[A-Z0-9]{12}\b", re.IGNORECASE)
 NOT_FOUND_MESSAGE = "未找到该任务，或该任务不属于当前账号。"
@@ -24,13 +25,13 @@ def extract_job_codes(text: str) -> list[str]:
 def _public_error(row: Any) -> str:
     code = str(row["error_code"] or "").strip()
     if code:
-        return code
+        return sanitize_public_error_code(code, default="internal_error")
     text = str(row["error"] or "").strip()
     if not text:
         return ""
     if "Traceback" in text or ":\\" in text or "/mnt/" in text or "/home/" in text:
         return "internal_error"
-    return text[:160]
+    return sanitize_public_error_code(text, default="internal_error")
 
 
 def _task_summary_from_row(row: Any, refunded: bool = False) -> dict[str, Any]:

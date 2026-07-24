@@ -92,8 +92,13 @@ async def send_message(
             message=body.message,
         )
     except AiSupportError as exc:
-        status = 404 if exc.code in {"not_found", "ai_support_disabled"} else 400
-        raise HTTPException(status_code=status, detail=exc.message) from exc
+        if exc.code in {"not_found", "ai_support_disabled"}:
+            status = 404
+        elif exc.code == "ai_support_unavailable":
+            status = 503
+        else:
+            status = 400
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": exc.message}) from exc
 
 
 @router.post("/conversations/{conversation_code}/clear")

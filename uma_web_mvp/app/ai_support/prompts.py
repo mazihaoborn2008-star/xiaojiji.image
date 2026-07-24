@@ -13,12 +13,26 @@ The reply string is what the user sees; do not put JSON, code fences, or interna
 Keep answers concise and clear.
 """.strip()
 
-SITE_FACTS = """
-Credits are the account balance unit.
-Normal generation costs 1 credit.
-Anima Double Sample costs 2 credits.
-Normal translation uses the original translation queue.
-Fast translation is a one-shot DeepSeek-assisted prompt cleanup and costs the configured fast translation credits.
-AI support can explain status and safe task summaries, but cannot perform refunds or account changes.
-Users can apply for deformed image review on /image-refund.
-""".strip()
+
+def build_site_facts(settings) -> str:
+    base_cost = max(0, int(getattr(settings, "price_fen_per_image", 1) or 1))
+    normal_translate = max(0, int(getattr(settings, "agent_surcharge_credits", 0) or 0))
+    fast_translate = max(0, int(getattr(settings, "fast_translator_cost_credits", 0) or 0))
+    smart_agent = max(0, int(getattr(settings, "smart_agent_cost_credits", 0) or 0))
+    enabled = lambda value: "enabled" if bool(value) else "disabled"
+    return "\n".join(
+        [
+            "Credits are the account balance unit.",
+            f"Normal generation costs {base_cost} credit(s).",
+            f"Anima Double Sample costs {base_cost * 2} credit(s).",
+            f"Normal translation surcharge is {normal_translate} credit(s).",
+            f"Fast translation surcharge is {fast_translate} credit(s).",
+            f"Smart Agent generation confirmation costs {smart_agent} credit(s).",
+            f"Normal translation is {enabled(getattr(settings, 'agent_enabled', False))}.",
+            f"Fast translation is {enabled(getattr(settings, 'fast_translator_enabled', False))}.",
+            f"Smart Agent is {enabled(getattr(settings, 'smart_agent_enabled', False))}.",
+            "AI support is free and can explain status and safe task summaries.",
+            "AI support cannot perform refunds, balance changes, cancellations, top-up approval, or task creation.",
+            "Users can apply for deformed image review on /image-refund.",
+        ]
+    )

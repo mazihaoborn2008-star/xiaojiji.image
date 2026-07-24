@@ -13,6 +13,7 @@ from typing import Any
 from app.agent import _apply_character_registry_to_refined_prompt
 from app.config import Settings
 from app.db import connect, fail_fast_translation_task_refund_atomic
+from app.provider_error_codes import classify_deepseek_failure, sanitize_public_error_code
 from app.services.deepseek_service import DeepSeekError, DeepSeekService
 from app.services.fast_translator_service import FAST_TRANSLATOR_SYSTEM_PROMPT, _safe_tags_from_model
 from app.smart_agent.character_preferences import split_prompt_tags
@@ -398,15 +399,18 @@ async def fast_translation_worker_loop(settings: Settings) -> None:
                     )
 
             except (DeepSeekError, RuntimeError) as exc:
-                error_code = getattr(exc, "code", None) or str(exc) or type(exc).__name__
+                info = classify_deepseek_failure(exc)
+                error_code = sanitize_public_error_code(getattr(exc, "code", None) or info.public_code)
                 print(
-                    f"[FAST_TRANSLATION_WORKER] failed request={request_code} job={job_code} error={error_code}",
+                    "[FAST_TRANSLATION_WORKER] failed "
+                    f"request={request_code} job={job_code} code={error_code} "
+                    f"type={info.exception_type or type(exc).__name__} http_status={info.http_status or ''}",
                     flush=True,
                 )
                 refunded = fail_fast_translation_task_refund_atomic(
                     settings,
                     job_code=job_code,
-                    error_code=str(error_code),
+                    error_code=error_code,
                 )
                 if refunded:
                     print(

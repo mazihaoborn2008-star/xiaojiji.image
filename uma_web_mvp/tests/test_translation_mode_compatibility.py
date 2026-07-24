@@ -165,7 +165,7 @@ class TestTranslationModeResolution:
                 "translation_mode": "normal",
             }, headers={"X-CSRF-Token": "test"})
             assert r.status_code == 503
-            assert r.json()["detail"]["code"] == "normal_translation_unavailable"
+            assert r.json()["detail"]["code"] == "agent_unavailable"
         finally:
             app.dependency_overrides.clear()
 
@@ -242,7 +242,7 @@ class TestTranslationModeResolution:
                 "use_agent": "true",
             }, headers={"X-CSRF-Token": "test"})
             assert r.status_code == 503
-            assert r.json()["detail"]["code"] == "normal_translation_unavailable"
+            assert r.json()["detail"]["code"] == "agent_unavailable"
         finally:
             app.dependency_overrides.clear()
 
