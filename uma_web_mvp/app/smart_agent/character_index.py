@@ -108,6 +108,22 @@ _DUPLICATE_GROUPS: dict[str, list[str]] = {}
 # 全库统计
 _INDEX_STATS: dict[str, Any] = {}
 
+# 英文短名阻止词集（构建期和匹配期共用）
+_EN_SHORT_BLOCKED_WORDS: set[str] = set()
+
+
+def _contains_cjk_or_kana(value: str) -> bool:
+    """Return True if value contains at least one CJK or Kana character."""
+    for ch in value:
+        cp = ord(ch)
+        if 0x4e00 <= cp <= 0x9fff:   # CJK Unified Ideographs
+            return True
+        if 0x3040 <= cp <= 0x309f:   # Hiragana
+            return True
+        if 0x30a0 <= cp <= 0x30ff:   # Katakana
+            return True
+    return False
+
 
 def _normalize_zh_key(text: str) -> str:
     """CJK 标准化：去标点、去空格、小写"""
@@ -144,24 +160,25 @@ def _build_all_indexes() -> None:
     for rec in records:
         ik = rec["identity_key"]
 
-        # 1. 中文完整名索引
+        # 1. 中文完整名索引（只允许含 CJK/Kana 的 key）
         if rec["name_zh"]:
             key = _normalize_zh_key(rec["name_zh"])
-            _ZH_NAME_INDEX[key].add(ik)
+            if key and _contains_cjk_or_kana(key):
+                _ZH_NAME_INDEX[key].add(ik)
 
         # 2. 英文完整名索引
         if rec["name_en"]:
             key = _normalize_en_key(rec["name_en"])
             _EN_NAME_INDEX[key].add(ik)
 
-        # 3. Alias 索引（区分中英文）
+        # 3. Alias 索引（区分中英文，中文 alias 只允许 CJK/Kana）
         for alias in rec["aliases"]:
             alias_str = str(alias).strip()
             if not alias_str:
                 continue
-            if any("\u4e00" <= ch <= "\u9fff" for ch in alias_str):
+            if _contains_cjk_or_kana(alias_str):
                 key = _normalize_zh_key(alias_str)
-                if key:
+                if key and _contains_cjk_or_kana(key):
                     _ZH_ALIAS_INDEX[key].add(ik)
             else:
                 key = _normalize_en_key(alias_str)
@@ -200,10 +217,10 @@ def _build_all_indexes() -> None:
 
     # 检查每个短子串是否匹配到多个不同的 zh_key（来自不同 identity）
     for short_zh, matching_keys in sub_candidates.items():
-        # Guard: filter out short ASCII substrings that cause false positives
-        # in English text (e.g., "to" from "photo", "me" from "anime").
-        # Keep longer ASCII substrings (like "miku") and all CJK substrings.
-        if len(short_zh) <= 3 and all(ord(ch) < 128 for ch in short_zh):
+        # Guard: only allow substrings containing CJK/Kana characters.
+        # Pure ASCII substrings (e.g., "to" from "kasane_teto") must not
+        # enter the CJK substring index.
+        if not _contains_cjk_or_kana(short_zh):
             continue
         identities_found: set[str] = set()
         for full_zh in matching_keys:
@@ -215,7 +232,8 @@ def _build_all_indexes() -> None:
     # 7. 英文短名索引（单英文词 → 多词人物名中的该词）
     # Common English words and franchise/series terms that appear as parts
     # of character names but should never trigger character matching alone.
-    _EN_SHORT_STOP_WORDS: set[str] = {
+    # Stored in module-level set for use at both build-time and match-time.
+    _EN_SHORT_BLOCKED_WORDS = {
         "black", "blue", "city", "coat", "dress", "fall", "gold",
         "green", "light", "love", "moon", "night", "rain", "red",
         "rose", "silver", "sky", "snow", "special", "spring", "star",
@@ -224,14 +242,14 @@ def _build_all_indexes() -> None:
     # Add franchise/series tokens: these are context hints, not character mentions.
     for franchise_key in _FRANCHISE_INDEX:
         for token in franchise_key.split():
-            _EN_SHORT_STOP_WORDS.add(token)
+            _EN_SHORT_BLOCKED_WORDS.add(token)
     all_en_keys: list[str] = []
     all_en_keys.extend(_EN_NAME_INDEX.keys())
     all_en_keys.extend(_EN_ALIAS_INDEX.keys())
     for en_key in all_en_keys:
         words = en_key.split()
         for word in words:
-            if len(word) >= 3 and word not in _EN_SHORT_STOP_WORDS:
+            if len(word) >= 3 and word not in _EN_SHORT_BLOCKED_WORDS:
                 _EN_SHORT_INDEX[word].add(en_key)
 
     # 8. 完全重名组检测
@@ -577,8 +595,8 @@ def _match_cjk_substrings(
             cjk_parts.add(norm)
 
     for mention in _ZH_SUBSTRING_INDEX:
-        # Guard: skip short ASCII substrings that cause false positives
-        if len(mention) <= 3 and all(ord(ch) < 128 for ch in mention):
+        # Match-stage defense: only allow CJK/Kana mentions
+        if not _contains_cjk_or_kana(mention):
             continue
         if mention and mention in haystack_zh:
             cjk_parts.add(mention)
@@ -665,6 +683,10 @@ def _match_en_short_names(
         if word_lower in seen_words:
             continue
         seen_words.add(word_lower)
+
+        # Match-stage defense: skip blocked words
+        if word_lower in _EN_SHORT_BLOCKED_WORDS:
+            continue
 
         if word_lower not in _EN_SHORT_INDEX:
             continue
