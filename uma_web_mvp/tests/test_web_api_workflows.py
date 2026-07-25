@@ -373,3 +373,157 @@ def test_save_image_reads_from_vae_decode(style_key: str):
     ref_node = wf.get(str(images_ref[0]))
     assert ref_node is not None
     assert ref_node["class_type"] == "VAEDecode"
+
+
+# ── Tests: 20. Full KSampler prompt chain (trigger + user prompt) ──
+
+def _resolve_text_input(workflow: dict, node_id: str, depth: int = 0) -> str | None:
+    """Recursively resolve a text/value input through reference chains."""
+    if depth > 20:
+        return None
+    node = workflow.get(str(node_id))
+    if not node:
+        return None
+    inputs = node.get("inputs", {})
+    for key in ("text", "value", "string"):
+        val = inputs.get(key)
+        if isinstance(val, str):
+            return val
+    for key in ("text", "value", "string"):
+        val = inputs.get(key)
+        if isinstance(val, list) and len(val) >= 1:
+            return _resolve_text_input(workflow, str(val[0]), depth + 1)
+    if node.get("class_type") == "JoinStringMulti":
+        parts = []
+        delimiter = str(inputs.get("delimiter", " "))
+        inputcount = int(inputs.get("inputcount", 2))
+        for i in range(1, inputcount + 1):
+            ref = inputs.get(f"string_{i}")
+            if isinstance(ref, list) and len(ref) >= 1:
+                resolved = _resolve_text_input(workflow, str(ref[0]), depth + 1)
+                if resolved is not None:
+                    parts.append(resolved)
+        return delimiter.join(parts)
+    return None
+
+
+@pytest.mark.parametrize("style_key", ["morialuluka", "bridge_complete", "hayakawa_tazuna", "akikawa_yayoi"])
+def test_ksampler_sees_trigger_plus_user_prompt(style_key: str):
+    """Full chain: KSampler positive must contain both trigger words and user prompt."""
+    test_prompt = "1girl, beautiful, sunset"
+    wf = prepare_workflow_payload(style_key, test_prompt, 1024, 1536, seed=42)
+    for node_id, node in wf.items():
+        if node.get("class_type") == "KSampler":
+            pos_ref = node["inputs"].get("positive")
+            if isinstance(pos_ref, list):
+                full_text = _resolve_text_input(wf, str(pos_ref[0]))
+                assert full_text is not None, "Could not resolve KSampler positive text"
+                assert test_prompt in full_text, f"User prompt not in KSampler: {full_text!r}"
+                trigger = wf["248"]["inputs"]["value"]
+                assert trigger in full_text, f"Trigger words not in KSampler: {full_text!r}"
+                break
+
+
+def test_artist_chain_ksampler_sees_only_user_prompt():
+    """画师串: KSampler positive must contain user prompt directly (no trigger chain)."""
+    test_prompt = "1girl, beautiful, sunset"
+    wf = prepare_workflow_payload("artist_chain_available", test_prompt, 1024, 1536, seed=42)
+    for node_id, node in wf.items():
+        if node.get("class_type") == "KSampler":
+            pos_ref = node["inputs"].get("positive")
+            if isinstance(pos_ref, list):
+                full_text = _resolve_text_input(wf, str(pos_ref[0]))
+                assert full_text == test_prompt, f"Expected direct prompt, got: {full_text!r}"
+                break
+
+
+# ── Tests: 21. No node 284 in any workflow ──
+
+@pytest.mark.parametrize("style_key", ALL_STYLE_KEYS)
+def test_no_node_284_in_workflow(style_key: str):
+    """None of the 5 Web workflows contain node 284."""
+    wf = load_workflow_template(style_key)
+    assert "284" not in wf, f"{style_key} unexpectedly contains node 284"
+
+
+# ── Tests: 22. LoRA chain: LoraLoader output feeds CLIPTextEncode ──
+
+@pytest.mark.parametrize("style_key", ["morialuluka", "bridge_complete", "hayakawa_tazuna", "akikawa_yayoi"])
+def test_lora_clip_feeds_positive_encode(style_key: str):
+    """LoRA's clip output must feed the positive CLIPTextEncode (via JoinStringMulti chain)."""
+    wf = load_workflow_template(style_key)
+    lora_node = EXPECTED_LORA_NODES[style_key]
+    lora_clip_out = [lora_node, 1]  # output slot 1 = clip
+    # The positive CLIPTextEncode (node 3) should reference lora clip
+    encode_node = wf["3"]
+    assert encode_node["class_type"] == "CLIPTextEncode"
+    clip_ref = encode_node["inputs"].get("clip")
+    assert isinstance(clip_ref, list), "CLIPTextEncode clip input is not a reference"
+    # Follow the reference chain to find LoraLoader
+    visited = set()
+    current = str(clip_ref[0])
+    found_lora = False
+    while current not in visited:
+        visited.add(current)
+        n = wf.get(current)
+        if not n:
+            break
+        if n.get("class_type") == "LoraLoader":
+            found_lora = True
+            break
+        # Follow clip input
+        c_ref = n.get("inputs", {}).get("clip")
+        if isinstance(c_ref, list):
+            current = str(c_ref[0])
+        else:
+            break
+    assert found_lora, f"CLIPTextEncode clip chain does not reach LoraLoader for {style_key}"
+
+
+# ── Tests: 23. AutoNegativePrompt does not receive user prompt ──
+
+@pytest.mark.parametrize("style_key", ["morialuluka", "bridge_complete", "hayakawa_tazuna", "akikawa_yayoi"])
+def test_auto_negative_prompt_not_overwritten(style_key: str):
+    """AutoNegativePrompt node 40 should not have its postive_prompt overwritten."""
+    wf = prepare_workflow_payload(style_key, "test prompt", 1024, 1536, seed=42)
+    neg_gen = wf.get("40")
+    assert neg_gen is not None
+    assert neg_gen["class_type"] == "AutoNegativePrompt"
+    # postive_prompt should remain empty (from template)
+    assert neg_gen["inputs"]["postive_prompt"] == ""
+
+
+# ── Tests: 24. End-to-end payload: all critical fields correct ──
+
+@pytest.mark.parametrize("style_key", ALL_STYLE_KEYS)
+def test_e2e_payload_all_fields(style_key: str):
+    """End-to-end: verify all critical fields in final payload."""
+    prompt = "1girl, standing, sunset"
+    w, h, seed, lora_w = 1536, 1024, 99999, 0.8
+    wf = prepare_workflow_payload(style_key, prompt, w, h, seed=seed, lora_weight=lora_w)
+    defn = WORKFLOW_DEFINITIONS[style_key]
+    # Prompt
+    assert wf[defn["prompt_node"]]["inputs"][defn["prompt_field"]] == prompt
+    # Resolution
+    assert wf[defn["width_node"]]["inputs"]["width"] == w
+    assert wf[defn["height_node"]]["inputs"]["height"] == h
+    # Seed
+    assert wf[defn["seed_node"]]["inputs"]["seed"] == seed
+    # LoRA
+    assert wf[defn["lora_node"]]["inputs"]["strength_model"] == lora_w
+    assert wf[defn["lora_node"]]["inputs"]["strength_clip"] == lora_w
+    # Output
+    assert wf[defn["output_node"]]["class_type"] == "SaveImage"
+    # Trigger preserved
+    if defn.get("fixed_trigger_node"):
+        template = load_workflow_template(style_key)
+        trigger_node = defn["fixed_trigger_node"]
+        assert wf[trigger_node]["inputs"]["value"] == template[trigger_node]["inputs"]["value"]
+    # Template not modified (verify by re-loading and comparing trigger/prompt nodes)
+    template_after = load_workflow_template(style_key)
+    if style_key == "artist_chain_available":
+        # For artist chain, node 18 should have been overwritten
+        assert wf["18"]["inputs"]["text"] == prompt
+    else:
+        # For the 4 trigger workflows, node 248 must be unchanged
+        assert wf["248"]["inputs"]["value"] == template_after["248"]["inputs"]["value"]
