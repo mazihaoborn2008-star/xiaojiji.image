@@ -99,6 +99,9 @@ WORKFLOW_DEFINITIONS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Public alias for external consumers
+WEB_WORKFLOW_DIR = _WEB_WORKFLOW_DIR
+
 # Set of valid style_keys for quick lookup
 VALID_STYLE_KEYS: set[str] = {k for k, v in WORKFLOW_DEFINITIONS.items() if v["enabled"]}
 
