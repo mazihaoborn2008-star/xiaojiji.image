@@ -406,49 +406,27 @@ def _apply_character_registry_to_refined_prompt(
             request_text=original_text,
         )
         final_prompt = str(enforced.get("positive_prompt") or "").strip()
-        # Multi-character: merge additional characters' identity tags
-        if len(characters) > 1:
-            from .smart_agent.character_preferences import locked_character_tags, split_prompt_tags, _tag_key, _apply_count_tags
-            existing_keys = {_tag_key(t) for t in split_prompt_tags(final_prompt)}
-            additional_tags: list[str] = []
-            for c in characters[1:]:  # skip first (already in prompt)
-                for tag in locked_character_tags(c):
-                    if _tag_key(tag) not in existing_keys:
-                        additional_tags.append(tag)
-                        existing_keys.add(_tag_key(tag))
-            if additional_tags:
-                # Insert after ALL of first character's locked tags (not just identity tags)
-                # to maintain contiguity required by validate_character_prompt
-                first_locked_set = {_tag_key(l) for l in locked_character_tags(characters[0])}
-                prompt_tags = split_prompt_tags(final_prompt)
-                insert_pos = 0
-                for i, t in enumerate(prompt_tags):
-                    if _tag_key(t) in first_locked_set:
-                        insert_pos = i + 1
-                for j, tag in enumerate(additional_tags):
-                    prompt_tags.insert(insert_pos + j, tag)
-                # Deduplicate generic tags (case-insensitive) preserving first occurrence
-                seen_tag_keys: set[str] = set()
-                deduped_tags: list[str] = []
-                for t in prompt_tags:
-                    tk = _tag_key(t)
-                    if tk not in seen_tag_keys:
-                        seen_tag_keys.add(tk)
-                        deduped_tags.append(t)
-                final_prompt = ", ".join(deduped_tags)
-                # Recalculate count tag for multiple characters
-                final_prompt = _apply_count_tags(final_prompt, characters)
         try:
             char_source = str((characters[0] if characters else {}).get("character_tag_source") or "")
             if char_source != "agent_fallback":
-                validate_character_prompt(
-                    prompt=final_prompt,
-                    character=characters[0] if characters else None,
-                    workflow_key=str(enforced.get("workflow_key") or ""),
-                    loras=list(enforced.get("loras") or []),
-                    user_text=original_text,
-                    all_characters=characters,
-                )
+                if len(characters) > 1:
+                    from .smart_agent.character_preferences import validate_multi_character_prompt
+                    validate_multi_character_prompt(
+                        prompt=final_prompt,
+                        characters=characters,
+                        workflow_key=str(enforced.get("workflow_key") or ""),
+                        loras=list(enforced.get("loras") or []),
+                        user_text=original_text,
+                    )
+                else:
+                    validate_character_prompt(
+                        prompt=final_prompt,
+                        character=characters[0] if characters else None,
+                        workflow_key=str(enforced.get("workflow_key") or ""),
+                        loras=list(enforced.get("loras") or []),
+                        user_text=original_text,
+                        all_characters=characters,
+                    )
         except CharacterPromptValidationError as exc:
             user_msg = "人物提示词整理失败，请重新尝试；如果该人物不在人物库中，系统将使用翻译后的名称继续生成。"
             raise RuntimeError(user_msg) from exc

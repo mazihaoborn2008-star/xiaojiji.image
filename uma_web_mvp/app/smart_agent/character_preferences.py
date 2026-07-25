@@ -414,6 +414,16 @@ def split_prompt_tags(value: str) -> list[str]:
     return tags
 
 
+def _split_prompt_tags_no_dedup(value: str) -> list[str]:
+    """Split tags without deduplication. Used for contiguity checks in multi-character prompts."""
+    tags: list[str] = []
+    for raw in str(value or "").replace("，", ",").split(","):
+        tag = " ".join(raw.strip().split())
+        if tag:
+            tags.append(tag)
+    return tags
+
+
 def extract_explicit_appearance_tags(text: str) -> set[str]:
     haystack = normalize_name(text)
     compact = str(text or "").lower().replace(" ", "")
@@ -514,6 +524,192 @@ def assemble_character_prompt_with_count(
     characters = [character] if character else []
     final = _apply_count_tags(base_prompt, characters)
     return final, removed
+
+
+def assemble_multi_character_prompt(
+    *,
+    characters: list[dict[str, Any]],
+    scene_prompt: str,
+    user_text: str = "",
+) -> tuple[str, int]:
+    """Multi-character Prompt assembly with proper tag blocks for each character.
+
+    Each character gets its own contiguous locked tag block.
+    Shared tags (like umamusume, horse_ears) are duplicated per character
+    to ensure each block is self-contained and contiguous.
+    Scene tags go after all character blocks.
+    Count tag (2girls, etc.) goes at the very front.
+    """
+    if not characters:
+        return scene_prompt, 0
+    if len(characters) == 1:
+        return assemble_character_prompt_with_count(
+            character=characters[0],
+            scene_prompt=scene_prompt,
+            user_text=user_text,
+        )
+
+    # Collect all locked tags per character (preserving order, allowing duplicates between blocks)
+    all_locked_keys: set[str] = set()
+    char_blocks: list[str] = []
+    total_removed = 0
+    for char in characters:
+        locked = locked_character_tags(char)
+        # Each character gets its own complete block (no deduplication between blocks)
+        char_blocks.append(", ".join(locked))
+        all_locked_keys.update(_tag_key(t) for t in locked)
+
+    # Collect all selected identity and appearance keys for whitelist
+    all_identity_keys: set[str] = set()
+    all_appearance_keys: set[str] = set()
+    for char in characters:
+        all_identity_keys.update(_selected_identity_keys(char))
+        for tag in locked_character_tags(char):
+            key = _tag_key(tag)
+            if key in APPEARANCE_TAG_KEYS:
+                all_appearance_keys.add(key)
+
+    # Clean scene prompt: remove foreign character tags and unselected appearance tags
+    explicit = extract_explicit_appearance_tags(user_text)
+    scene_tags: list[str] = []
+    seen_scene_keys: set[str] = set()
+    for tag in split_prompt_tags(scene_prompt):
+        key = _tag_key(tag)
+        if key in all_locked_keys:
+            continue
+        if key in _known_identity_tag_keys() and key not in all_identity_keys:
+            total_removed += 1
+            continue
+        if key in APPEARANCE_TAG_KEYS and key not in explicit and key not in all_appearance_keys:
+            total_removed += 1
+            continue
+        if key not in seen_scene_keys:
+            scene_tags.append(tag)
+            seen_scene_keys.add(key)
+
+    # Build final prompt: char blocks + scene tags
+    # Do NOT use _apply_count_tags here because it deduplicates via split_prompt_tags
+    blocks = char_blocks + [", ".join(scene_tags)]
+    base_prompt = ", ".join(b for b in blocks if b.strip())
+
+    # Manually add count tag without deduplication
+    count_tag = _compute_count_tag(characters)
+    if count_tag:
+        final = f"{count_tag}, {base_prompt}" if base_prompt else count_tag
+    else:
+        final = base_prompt
+    return final, total_removed
+
+
+def validate_multi_character_prompt(
+    *,
+    prompt: str,
+    characters: list[dict[str, Any]],
+    workflow_key: str,
+    loras: list[dict[str, Any]],
+    user_text: str = "",
+) -> None:
+    """Validate a multi-character prompt.
+
+    Checks:
+    1. All selected characters' locked tags are present.
+    2. Each character's locked tags are contiguous.
+    3. No foreign character identity tags.
+    4. No unexpected appearance tags (unless user-explicit or belonging to a selected character).
+    """
+    if not characters:
+        return
+    if len(characters) == 1:
+        validate_character_prompt(
+            prompt=prompt,
+            character=characters[0],
+            workflow_key=workflow_key,
+            loras=loras,
+            user_text=user_text,
+            all_characters=characters,
+        )
+        return
+
+    # Use non-deduped tags for contiguity check (shared tags appear in each character block)
+    tags = _split_prompt_tags_no_dedup(prompt)
+    if not tags:
+        raise CharacterPromptValidationError("character_prompt_validation_failed")
+
+    # Build whitelist of all selected characters' identity and appearance keys
+    all_identity_keys: set[str] = set()
+    all_appearance_keys: set[str] = set()
+    all_locked_keys: set[str] = set()
+    for char in characters:
+        all_identity_keys.update(_selected_identity_keys(char))
+        locked = locked_character_tags(char)
+        for tag in locked:
+            key = _tag_key(tag)
+            all_locked_keys.add(key)
+            if key in APPEARANCE_TAG_KEYS:
+                all_appearance_keys.add(key)
+
+    prompt_keys = [_tag_key(tag) for tag in tags]
+
+    # Check each character's locked tags are present (using deduped version for presence check)
+    deduped_keys = {_tag_key(t) for t in split_prompt_tags(prompt)}
+    _count_tag_keys = {_tag_key(t) for t in ("1girl", "1boy", "2girls", "2boys", "3girls", "3boys", "4girls", "4boys", "5girls", "5boys", "solo")}
+    for char in characters:
+        locked = locked_character_tags(char)
+        locked_keys = [_tag_key(t) for t in locked]
+        locked_keys_no_count = [k for k in locked_keys if k not in _count_tag_keys]
+        if any(key not in deduped_keys for key in locked_keys_no_count):
+            raise CharacterPromptValidationError("character_prompt_validation_failed")
+
+    # Check contiguity: skip count tags at the start
+    prompt_keys_after_count = list(prompt_keys)
+    while prompt_keys_after_count and prompt_keys_after_count[0] in _count_tag_keys:
+        prompt_keys_after_count.pop(0)
+
+    # For multi-character, check each character's block is contiguous
+    offset = 0
+    for char in characters:
+        locked = locked_character_tags(char)
+        locked_keys = [_tag_key(t) for t in locked if _tag_key(t) not in _count_tag_keys]
+        if not locked_keys:
+            continue
+        found = False
+        for i in range(offset, len(prompt_keys_after_count)):
+            if prompt_keys_after_count[i:i+len(locked_keys)] == locked_keys:
+                offset = i + len(locked_keys)
+                found = True
+                break
+        if not found:
+            raise CharacterPromptValidationError("character_prompt_validation_failed")
+
+    # Check for foreign character tags
+    foreign = _known_identity_tag_keys() - all_identity_keys
+    for tag in tags:
+        key = _tag_key(tag)
+        if key in foreign:
+            raise CharacterPromptValidationError("character_prompt_validation_failed")
+        if key not in all_identity_keys and key not in all_appearance_keys and _looks_like_identity_tag(tag):
+            raise CharacterPromptValidationError("character_prompt_validation_failed")
+
+    # Check for unexpected appearance tags
+    explicit = extract_explicit_appearance_tags(user_text)
+    for tag in split_prompt_tags(prompt):
+        key = _tag_key(tag)
+        if key in APPEARANCE_TAG_KEYS and key not in explicit and key not in all_appearance_keys:
+            raise CharacterPromptValidationError("unexpected_inferred_appearance_tags")
+
+    # Check workflow character binding
+    workflow = get_workflow(workflow_key) or {}
+    workflow_character_key = str(workflow.get("character_key") or "").strip()
+    if workflow_character_key:
+        selected_keys = {str(c.get("key") or "").strip() for c in characters}
+        if workflow_character_key not in selected_keys:
+            raise CharacterPromptValidationError("character_prompt_validation_failed")
+
+    # Check for empty tags and double commas
+    if any(not tag.strip() for tag in str(prompt).split(",")):
+        raise CharacterPromptValidationError("character_prompt_validation_failed")
+    if ",," in str(prompt):
+        raise CharacterPromptValidationError("character_prompt_validation_failed")
 
 
 def remove_foreign_character_tags(
@@ -1002,18 +1198,21 @@ def enforce_character_preferences(
     character_workflow_key = ""
     allow_external_lora = False
     selected_character = characters[0] if characters else None
+    is_multi = len(characters) > 1
 
     for character in characters:
         matched_tags.append(str(character.get("tags") or ""))
         character_lora_keys.update(_character_lora_keys(character))
-        workflow = _find_character_workflow(character, is_admin=is_admin, request_text=request_text or positive_prompt)
-        if workflow:
-            selected_workflow = str(workflow["key"])
-            character_workflow_key = selected_workflow
-            allow_external_lora = bool(workflow.get("allow_external_lora"))
-            fallback_level = "character_workflow"
-            forced = True
-            break
+        # For multi-character, don't force a single character's专属工作流
+        if not is_multi:
+            workflow = _find_character_workflow(character, is_admin=is_admin, request_text=request_text or positive_prompt)
+            if workflow:
+                selected_workflow = str(workflow["key"])
+                character_workflow_key = selected_workflow
+                allow_external_lora = bool(workflow.get("allow_external_lora"))
+                fallback_level = "character_workflow"
+                forced = True
+                break
 
     if character_workflow_key:
         clean_loras = sanitize_loras(raw_loras, selected_workflow)
@@ -1021,11 +1220,22 @@ def enforce_character_preferences(
         if not allow_external_lora:
             raw_loras = _remove_character_loras(raw_loras, character_lora_keys)
             clean_loras = sanitize_loras(raw_loras, selected_workflow)
-        final_prompt, removed_count = assemble_character_prompt_with_count(
-            character=selected_character,
-            scene_prompt=positive_prompt,
-            user_text=request_text,
-        )
+        if is_multi:
+            final_prompt, removed_count = assemble_multi_character_prompt(
+                characters=characters,
+                scene_prompt=positive_prompt,
+                user_text=request_text,
+            )
+            all_locked = []
+            for c in characters:
+                all_locked.extend(locked_character_tags(c))
+        else:
+            final_prompt, removed_count = assemble_character_prompt_with_count(
+                character=selected_character,
+                scene_prompt=positive_prompt,
+                user_text=request_text,
+            )
+            all_locked = locked_character_tags(selected_character)
         return {
             "workflow_key": selected_workflow,
             "positive_prompt": final_prompt,
@@ -1035,7 +1245,7 @@ def enforce_character_preferences(
             "character_workflow_key": character_workflow_key,
             "allow_external_lora": allow_external_lora,
             "character_tag_injected": bool([tag for tag in matched_tags if str(tag).strip()]),
-            "locked_character_tags": locked_character_tags(selected_character),
+            "locked_character_tags": all_locked,
             "foreign_character_tags_removed_count": removed_count,
             "inferred_appearance_tags_removed_count": removed_count,
             "internal_lora_count": int(workflow_meta.get("embedded_lora_count") or 0),
@@ -1077,11 +1287,22 @@ def enforce_character_preferences(
             forced = True
 
     clean_loras = sanitize_loras(raw_loras, selected_workflow)
-    final_prompt, removed_count = assemble_character_prompt_with_count(
-        character=selected_character,
-        scene_prompt=positive_prompt,
-        user_text=request_text,
-    )
+    if is_multi:
+        final_prompt, removed_count = assemble_multi_character_prompt(
+            characters=characters,
+            scene_prompt=positive_prompt,
+            user_text=request_text,
+        )
+        all_locked = []
+        for c in characters:
+            all_locked.extend(locked_character_tags(c))
+    else:
+        final_prompt, removed_count = assemble_character_prompt_with_count(
+            character=selected_character,
+            scene_prompt=positive_prompt,
+            user_text=request_text,
+        )
+        all_locked = locked_character_tags(selected_character)
     return {
         "workflow_key": selected_workflow,
         "positive_prompt": final_prompt,
@@ -1091,7 +1312,7 @@ def enforce_character_preferences(
         "character_workflow_key": character_workflow_key,
         "allow_external_lora": allow_external_lora,
         "character_tag_injected": bool([tag for tag in matched_tags if str(tag).strip()]),
-        "locked_character_tags": locked_character_tags(selected_character),
+        "locked_character_tags": all_locked,
         "foreign_character_tags_removed_count": removed_count,
         "inferred_appearance_tags_removed_count": removed_count,
         "internal_lora_count": 0,

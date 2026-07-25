@@ -16,6 +16,7 @@ from .character_preferences import (
     enforce_character_preferences,
     public_character_matches,
     validate_character_prompt,
+    validate_multi_character_prompt,
 )
 from .deepseek_client import DeepSeekError, complete_json
 from .lora_registry import lora_summaries, sanitize_loras
@@ -328,12 +329,21 @@ async def build_smart_agent_plan(
     loras = list(enforced["loras"])
     if character_tag_source != "agent_fallback" and character_key(characters[0] if characters else None):
         try:
-            validate_character_prompt(
-                prompt=positive,
-                character=characters[0] if characters else None,
-                workflow_key=workflow_key,
-                loras=loras,
-            )
+            if len(characters) > 1:
+                validate_multi_character_prompt(
+                    prompt=positive,
+                    characters=characters,
+                    workflow_key=workflow_key,
+                    loras=loras,
+                    user_text=request_text,
+                )
+            else:
+                validate_character_prompt(
+                    prompt=positive,
+                    character=characters[0] if characters else None,
+                    workflow_key=workflow_key,
+                    loras=loras,
+                )
         except CharacterPromptValidationError as exc:
             user_msg = "人物提示词整理失败，请重新尝试；如果该人物不在人物库中，系统将使用翻译后的名称继续生成。"
             raise SmartAgentError(user_msg, code="character_prompt_validation_failed") from exc
