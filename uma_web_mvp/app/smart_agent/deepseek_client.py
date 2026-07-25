@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import re
 from typing import Any
 
 import httpx
 
 from app.config import Settings
 from app.provider_error_codes import classify_deepseek_failure
+
+logger = logging.getLogger(__name__)
+
+# Pattern to extract first complete JSON object from text with surrounding prose
+_JSON_OBJECT_RE = re.compile(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", re.DOTALL)
 
 
 class DeepSeekError(RuntimeError):
@@ -57,6 +64,7 @@ async def complete_json(
         ],
         "temperature": float(temperature),
         "response_format": {"type": "json_object"},
+        "thinking": {"type": "disabled"},
         "max_tokens": max(512, int(max_tokens or settings.deepseek_chat_max_output_tokens or 4096)),
     }
     last_error: Exception | None = None
@@ -70,7 +78,11 @@ async def complete_json(
                 raise DeepSeekError(f"deepseek_http_{response.status_code}")
             data = response.json()
             choice = data["choices"][0]
-            content = choice["message"]["content"]
+            message = choice["message"]
+            content = message.get("content") or ""
+            # Never use reasoning_content as the final answer
+            if not content.strip():
+                raise DeepSeekError("deepseek_empty_content")
             parsed = _parse_json_object(str(content))
             finish_reason = str(choice.get("finish_reason") or "")
             if finish_reason:
@@ -78,6 +90,14 @@ async def complete_json(
             return parsed
         except Exception as exc:
             last_error = exc
+            info = classify_deepseek_failure(exc)
+            logger.warning(
+                "[DEEPSEEK] attempt=%d/%d failed code=%s type=%s http_status=%s",
+                index + 1, attempts,
+                info.public_code,
+                info.exception_type,
+                info.http_status or "",
+            )
             if index + 1 < attempts:
                 await asyncio.sleep(1.2 * (index + 1))
     info = classify_deepseek_failure(last_error)
@@ -91,15 +111,31 @@ async def complete_json(
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
+    """Parse a JSON object from model output, handling markdown fences and surrounding prose."""
     clean = text.strip()
+    if not clean:
+        raise DeepSeekError("deepseek_empty_content")
+    # Strip markdown code fences
     if clean.startswith("```"):
         clean = clean.strip("`").strip()
         if clean.lower().startswith("json"):
             clean = clean[4:].strip()
+    # Try direct parse first
     try:
         data = json.loads(clean)
-    except json.JSONDecodeError as exc:
-        raise DeepSeekError("deepseek_invalid_json") from exc
-    if not isinstance(data, dict):
+        if isinstance(data, dict):
+            return data
         raise DeepSeekError("deepseek_json_not_object")
-    return data
+    except json.JSONDecodeError:
+        pass
+    # Try extracting first complete JSON object from surrounding prose
+    match = _JSON_OBJECT_RE.search(clean)
+    if match:
+        try:
+            data = json.loads(match.group())
+            if isinstance(data, dict):
+                return data
+            raise DeepSeekError("deepseek_json_not_object")
+        except json.JSONDecodeError:
+            pass
+    raise DeepSeekError("deepseek_invalid_json")
