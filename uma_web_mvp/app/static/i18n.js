@@ -29,7 +29,7 @@
     'login.code_label': '6 位验证码',
     'login.register.button': '注册',
     'login.registering': '注册中...',
-    'login.invite_code': '邀请码（可选）',
+    'login.invite_code': '邀请码（选填）',
     'login.invite_code_placeholder': '填写好友邀请码，注册后额外获得 10 credits',
     'login.resetting': '重置中...',
     'login.resend': '重新发送',
